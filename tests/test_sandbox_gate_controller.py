@@ -199,3 +199,40 @@ def test_can_run_rejects_node_that_host_can_execute_but_sandbox_cannot_see(
     )
 
     assert controller.can_run is False
+
+
+def test_can_run_rejects_runtime_overlapping_workspace(tmp_path: Path) -> None:
+    workspace = tmp_path / "AIOS"
+    workspace.mkdir()
+    runtime_root = workspace / ".runtime"
+    pi = _make_executable(runtime_root / "bin" / "pi")
+    node = _make_executable(runtime_root / "bin" / "node")
+    bwrap = _make_executable(tmp_path / "bin" / "bwrap")
+    agent = AgentController(
+        SettingsStore(tmp_path / "settings.json"),
+        _unexpected_transport,
+        settings=AppSettings(
+            workspace_root=str(workspace),
+            agent=AgentSettings(
+                executable=str(pi),
+                runtime_root=str(runtime_root),
+                bubblewrap_executable=str(bwrap),
+            ),
+        ),
+    )
+    facts = HostRuntimeFacts(
+        os_name="Linux",
+        os_release="test",
+        python_version="3.13",
+        pyside_version="6.11.2",
+        qt_version="6.11.2",
+        node_executable=str(node),
+    )
+    controller = SandboxGateController(
+        agent,
+        HeldRunner,
+        facts,
+        outside_root=tmp_path / "outside",
+    )
+
+    assert controller.can_run is False
