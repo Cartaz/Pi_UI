@@ -13,7 +13,7 @@ from typing import Any, Final
 from urllib.parse import urlsplit
 
 APP_DIR_NAME: Final = "pi-ui"
-CURRENT_SCHEMA_VERSION: Final = 1
+CURRENT_SCHEMA_VERSION: Final = 2
 _ENV_NAME_RE: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -109,7 +109,7 @@ class SettingsStore:
 
         try:
             raw = json.loads(text)
-            return _parse_settings(raw)
+            return _parse_settings(_migrate_settings(raw))
         except (json.JSONDecodeError, SettingsValidationError) as exc:
             quarantined = self._quarantine_invalid_file()
             self.last_recovery = SettingsRecovery(
@@ -119,7 +119,7 @@ class SettingsStore:
             return AppSettings()
 
     def save(self, settings: AppSettings) -> None:
-        validated = _parse_settings(asdict(settings))
+        validated = _parse_settings(_migrate_settings(asdict(settings)))
         payload = json.dumps(
             asdict(validated),
             ensure_ascii=False,
@@ -159,6 +159,35 @@ class SettingsStore:
                 f"settings are invalid and could not be preserved: {self.path}"
             ) from exc
         return quarantined
+
+
+def _migrate_settings(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise SettingsValidationError("settings root must be a JSON object")
+
+    version = raw.get("schema_version", 1)
+    if version == CURRENT_SCHEMA_VERSION:
+        return dict(raw)
+    if version != 1:
+        raise SettingsValidationError(
+            f"unsupported settings schema version: {version!r}"
+        )
+
+    migrated = dict(raw)
+    agent_raw = migrated.get("agent", {})
+    if not isinstance(agent_raw, dict):
+        raise SettingsValidationError("agent settings must be a JSON object")
+    agent = dict(agent_raw)
+
+    # Schema 1 pre-dated the Bubblewrap runtime and commonly stored bare `pi`.
+    # Pi_UI now owns a fixed runtime under /opt/pi-agent; preserve any explicit
+    # absolute executable while migrating the old default to the managed path.
+    if agent.get("executable", "pi") == "pi":
+        agent["executable"] = AgentSettings().executable
+
+    migrated["agent"] = agent
+    migrated["schema_version"] = CURRENT_SCHEMA_VERSION
+    return migrated
 
 
 def _parse_settings(raw: Any) -> AppSettings:
