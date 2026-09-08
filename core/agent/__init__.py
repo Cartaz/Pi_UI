@@ -23,6 +23,7 @@ from .model_discovery import (
     ModelConfigManagementState,
     PiModelsConfigDiscovery,
 )
+from .model_import import ModelImportBlocker, PiModelImportProposal, PiModelImportService
 from .protocol import JsonlDecoder, JsonlProtocolError, encode_command
 from .runtime import (
     PiLaunchSpec,
@@ -47,9 +48,12 @@ __all__ = [
     "MissingRuntimeCredentialError",
     "ModelConfigError",
     "ModelConfigManagementState",
+    "ModelImportBlocker",
     "ModelsConfigChangedExternallyError",
     "ModelsConfigWriteResult",
     "PiLaunchSpec",
+    "PiModelImportProposal",
+    "PiModelImportService",
     "PiModelsConfigDiscovery",
     "PiModelsConfigManager",
     "PiRuntimeBootstrap",
