@@ -1,16 +1,21 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtCore import QEventLoop, QTimer
+from PySide6.QtWidgets import QApplication
 
 from controllers.agent_controller import ConnectionState
 from ui.native.app_shutdown import AppShutdownCoordinator
 
 
-def _application() -> QCoreApplication:
-    instance = QCoreApplication.instance()
+def _application() -> QApplication:
+    instance = QApplication.instance()
     if instance is not None:
         return instance
-    return QCoreApplication([])
+    return QApplication([])
 
 
 class FakeController:
