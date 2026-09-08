@@ -8,8 +8,11 @@ import pytest
 
 from core.agent.model_config import (
     LOCAL_AUTH_PLACEHOLDER,
+    MANAGED_MARKER_FILENAME,
     ModelConfigError,
+    ModelsConfigChangedExternallyError,
     PiModelsConfigManager,
+    UnmanagedModelsConfigError,
 )
 from core.agent.runtime import PiRuntimePaths
 from core.settings import AgentSettings
@@ -116,21 +119,72 @@ def test_authenticated_profile_requires_environment_variable_name() -> None:
 def test_models_config_is_written_atomically_without_secret_value(tmp_path: Path) -> None:
     manager = PiModelsConfigManager()
     paths = PiRuntimePaths.for_workspace(tmp_path)
-    settings = AgentSettings(
+    settings = _settings()
+
+    result = manager.write(settings, paths)
+    raw = result.path.read_text(encoding="utf-8")
+    parsed = json.loads(raw)
+    marker = result.path.parent / MANAGED_MARKER_FILENAME
+
+    assert result.path == tmp_path.resolve() / ".pi-agent/models.json"
+    assert parsed["providers"]["ornith-lan"]["apiKey"] == "$ORNITH_API_KEY"
+    assert "actual-secret-value" not in raw
+    assert marker.is_file()
+    assert not list(result.path.parent.glob("*.tmp"))
+    if os.name == "posix":
+        assert result.path.stat().st_mode & 0o777 == 0o600
+        assert marker.stat().st_mode & 0o777 == 0o600
+
+
+def test_existing_unmanaged_models_file_is_never_overwritten(tmp_path: Path) -> None:
+    paths = PiRuntimePaths.for_workspace(tmp_path)
+    target = paths.host_agent_dir / "models.json"
+    target.parent.mkdir(parents=True)
+    original = '{"providers":{"working-baseline":{}}}\n'
+    target.write_text(original, encoding="utf-8")
+
+    with pytest.raises(UnmanagedModelsConfigError, match="unmanaged"):
+        PiModelsConfigManager().write(_settings(), paths)
+
+    assert target.read_text(encoding="utf-8") == original
+    assert not (target.parent / MANAGED_MARKER_FILENAME).exists()
+
+
+def test_external_edit_of_managed_models_file_blocks_next_write(tmp_path: Path) -> None:
+    paths = PiRuntimePaths.for_workspace(tmp_path)
+    manager = PiModelsConfigManager()
+    result = manager.write(_settings(), paths)
+    result.path.write_text('{"externally":"changed"}\n', encoding="utf-8")
+
+    with pytest.raises(ModelsConfigChangedExternallyError, match="changed outside"):
+        manager.write(_settings(), paths)
+
+    assert result.path.read_text(encoding="utf-8") == '{"externally":"changed"}\n'
+
+
+def test_managed_models_file_can_be_updated_when_hash_still_matches(tmp_path: Path) -> None:
+    paths = PiRuntimePaths.for_workspace(tmp_path)
+    manager = PiModelsConfigManager()
+    manager.write(_settings(), paths)
+
+    updated = AgentSettings(
+        provider="ornith-lan",
+        model="Ornith-v2",
+        base_url="http://192.0.2.51:8080/v1",
+        auth_mode="env",
+        api_key_env="ORNITH_API_KEY",
+    )
+    result = manager.write(updated, paths)
+    parsed = json.loads(result.path.read_text(encoding="utf-8"))
+
+    assert parsed["providers"]["ornith-lan"]["models"] == [{"id": "Ornith-v2"}]
+
+
+def _settings() -> AgentSettings:
+    return AgentSettings(
         provider="ornith-lan",
         model="Ornith",
         base_url="http://192.0.2.50:8080/v1",
         auth_mode="env",
         api_key_env="ORNITH_API_KEY",
     )
-
-    result = manager.write(settings, paths)
-    raw = result.path.read_text(encoding="utf-8")
-    parsed = json.loads(raw)
-
-    assert result.path == tmp_path.resolve() / ".pi-agent/models.json"
-    assert parsed["providers"]["ornith-lan"]["apiKey"] == "$ORNITH_API_KEY"
-    assert "actual-secret-value" not in raw
-    assert not list(result.path.parent.glob("*.tmp"))
-    if os.name == "posix":
-        assert result.path.stat().st_mode & 0o777 == 0o600
