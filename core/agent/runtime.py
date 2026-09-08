@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Mapping
 
+from core.sandbox import build_bubblewrap_arguments
 from core.settings import AgentSettings
 
 SANDBOX_WORKSPACE = PurePosixPath("/workspace")
@@ -98,15 +99,17 @@ def build_launch_spec(
             paths=runtime_paths,
         )
 
-    arguments = _build_bubblewrap_arguments(
+    executable = _validated_sandbox_pi_executable(settings)
+    arguments = build_bubblewrap_arguments(
         settings,
-        paths=runtime_paths,
+        host_workspace=runtime_paths.host_workspace,
+        sandbox_workspace=runtime_paths.sandbox_workspace,
         sandbox_home=sandbox_home,
-        pi_arguments=pi_arguments,
+        command=(str(executable), *pi_arguments),
     )
     return PiLaunchSpec(
         executable=settings.bubblewrap_executable,
-        arguments=tuple(arguments),
+        arguments=arguments,
         environment=environment,
         working_directory=runtime_paths.host_workspace,
         paths=runtime_paths,
@@ -171,13 +174,7 @@ def _build_pi_arguments(
     return arguments
 
 
-def _build_bubblewrap_arguments(
-    settings: AgentSettings,
-    *,
-    paths: PiRuntimePaths,
-    sandbox_home: PurePosixPath,
-    pi_arguments: list[str],
-) -> list[str]:
+def _validated_sandbox_pi_executable(settings: AgentSettings) -> PurePosixPath:
     runtime_root = PurePosixPath(settings.runtime_root)
     executable = PurePosixPath(settings.executable)
     if not runtime_root.is_absolute() or not executable.is_absolute():
@@ -190,63 +187,4 @@ def _build_bubblewrap_arguments(
         raise RuntimeConfigurationError(
             "sandboxed Pi executable must live inside runtime_root"
         ) from exc
-
-    return [
-        "--unshare-all",
-        "--share-net",
-        "--die-with-parent",
-        "--new-session",
-        "--ro-bind",
-        "/usr",
-        "/usr",
-        "--symlink",
-        "usr/bin",
-        "/bin",
-        "--symlink",
-        "usr/sbin",
-        "/sbin",
-        "--symlink",
-        "usr/lib",
-        "/lib",
-        "--symlink",
-        "usr/lib64",
-        "/lib64",
-        "--ro-bind",
-        str(runtime_root),
-        str(runtime_root),
-        "--proc",
-        "/proc",
-        "--dev",
-        "/dev",
-        "--tmpfs",
-        "/tmp",
-        "--tmpfs",
-        "/home",
-        "--dir",
-        str(sandbox_home),
-        "--dir",
-        "/etc",
-        "--ro-bind-try",
-        "/etc/resolv.conf",
-        "/etc/resolv.conf",
-        "--ro-bind-try",
-        "/etc/hosts",
-        "/etc/hosts",
-        "--ro-bind-try",
-        "/etc/nsswitch.conf",
-        "/etc/nsswitch.conf",
-        "--ro-bind-try",
-        "/etc/ssl/certs",
-        "/etc/ssl/certs",
-        "--ro-bind-try",
-        "/etc/ca-certificates",
-        "/etc/ca-certificates",
-        "--bind",
-        str(paths.host_workspace),
-        str(paths.sandbox_workspace),
-        "--chdir",
-        str(paths.sandbox_workspace),
-        "--",
-        str(executable),
-        *pi_arguments,
-    ]
+    return executable
