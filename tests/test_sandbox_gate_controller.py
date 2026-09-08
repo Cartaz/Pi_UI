@@ -146,7 +146,7 @@ def test_controller_runs_explicit_gate_and_cleans_fixtures(tmp_path: Path) -> No
     assert controller.manifest
     assert all(check.status == PreflightStatus.PASS for check in controller.checks)
     assert not list((agent.workspace / ".pi-agent").glob(".m0-gate-*"))
-    assert not (tmp_path / "outside").glob("m0-gate-*")
+    assert not list((tmp_path / "outside").glob("m0-gate-*"))
 
 
 def test_cancel_removes_fixtures_and_ignores_late_callbacks(tmp_path: Path) -> None:
@@ -169,6 +169,7 @@ def test_cancel_removes_fixtures_and_ignores_late_callbacks(tmp_path: Path) -> N
     assert controller.status_text == "Sandbox gate cancelled"
     assert controller.manifest == ""
     assert not list((agent.workspace / ".pi-agent").glob(".m0-gate-*"))
+    assert not list((tmp_path / "outside").glob("m0-gate-*"))
 
     assert result_handler is not None and finished_handler is not None
     result_handler(_success_result())
