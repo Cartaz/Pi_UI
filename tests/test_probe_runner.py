@@ -29,7 +29,7 @@ def _environment(tmp_path: Path) -> tuple[tuple[str, str], ...]:
 
 
 def test_probe_runner_reports_stdout_and_runs_sequentially(tmp_path: Path) -> None:
-    _application()
+    app = _application()
     runner = QtProbeRunner()
     loop = QEventLoop()
     results: list[CommandProbeResult] = []
@@ -69,6 +69,7 @@ def test_probe_runner_reports_stdout_and_runs_sequentially(tmp_path: Path) -> No
     )
     loop.exec()
     watchdog.stop()
+    app.processEvents()
 
     assert timed_out is False
     assert [item.probe_id for item in results] == ["one", "two"]
@@ -80,7 +81,7 @@ def test_probe_runner_reports_stdout_and_runs_sequentially(tmp_path: Path) -> No
 
 
 def test_probe_runner_marks_timeout_without_blocking_event_loop(tmp_path: Path) -> None:
-    _application()
+    app = _application()
     runner = QtProbeRunner()
     loop = QEventLoop()
     results: list[CommandProbeResult] = []
@@ -111,6 +112,7 @@ def test_probe_runner_marks_timeout_without_blocking_event_loop(tmp_path: Path) 
     )
     loop.exec()
     watchdog.stop()
+    app.processEvents()
 
     assert timed_out is False
     assert len(results) == 1
