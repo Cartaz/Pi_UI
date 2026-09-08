@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,10 +14,20 @@ from core.settings import AgentSettings
 from .runtime import PiRuntimePaths
 
 LOCAL_AUTH_PLACEHOLDER: Final = "pi-ui-local"
+MANAGED_MARKER_FILENAME: Final = ".models.json.pi-ui-managed"
+_MANAGED_MARKER_SCHEMA: Final = 1
 
 
 class ModelConfigError(ValueError):
     """Raised when the configured model profile is not launch-ready."""
+
+
+class UnmanagedModelsConfigError(ModelConfigError):
+    """Raised instead of overwriting a models.json not owned by Pi_UI."""
+
+
+class ModelsConfigChangedExternallyError(ModelConfigError):
+    """Raised when a managed models.json changed outside Pi_UI."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +42,8 @@ class PiModelsConfigManager:
 
     ``models.json`` is not a second source of truth. It is generated from
     ``AgentSettings`` immediately before the managed Pi runtime needs it.
+    Pre-existing files are never adopted implicitly, and external edits to a
+    previously managed file are detected by a content hash before replacement.
     """
 
     def build_payload(self, settings: AgentSettings) -> dict[str, Any]:
@@ -95,7 +108,21 @@ class PiModelsConfigManager:
     ) -> ModelsConfigWriteResult:
         payload = self.render(settings)
         target = paths.host_agent_dir / "models.json"
+        marker = paths.host_agent_dir / MANAGED_MARKER_FILENAME
+        self._assert_safe_to_replace(target, marker)
+
         atomic_write_text(target, payload, mode=0o600)
+        marker_payload = json.dumps(
+            {
+                "schema": _MANAGED_MARKER_SCHEMA,
+                "managedBy": "Pi_UI",
+                "sha256": _sha256_text(payload),
+            },
+            indent=2,
+            sort_keys=True,
+        ) + "\n"
+        atomic_write_text(marker, marker_payload, mode=0o600)
+
         assert settings.provider is not None
         assert settings.model is not None
         return ModelsConfigWriteResult(
@@ -103,6 +130,50 @@ class PiModelsConfigManager:
             provider=settings.provider,
             model=settings.model,
         )
+
+    def _assert_safe_to_replace(self, target: Path, marker: Path) -> None:
+        target_exists = target.exists()
+        marker_exists = marker.exists()
+
+        if not target_exists and not marker_exists:
+            return
+        if target_exists and not marker_exists:
+            raise UnmanagedModelsConfigError(
+                f"refusing to overwrite unmanaged Pi model config: {target}"
+            )
+        if marker_exists and not target_exists:
+            raise ModelsConfigChangedExternallyError(
+                "Pi_UI model ownership marker exists but models.json is missing"
+            )
+
+        try:
+            marker_data = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ModelsConfigChangedExternallyError(
+                "Pi_UI model ownership marker is unreadable or invalid"
+            ) from exc
+
+        expected_hash = marker_data.get("sha256") if isinstance(marker_data, dict) else None
+        if (
+            not isinstance(marker_data, dict)
+            or marker_data.get("schema") != _MANAGED_MARKER_SCHEMA
+            or marker_data.get("managedBy") != "Pi_UI"
+            or not isinstance(expected_hash, str)
+        ):
+            raise ModelsConfigChangedExternallyError(
+                "Pi_UI model ownership marker has an unsupported format"
+            )
+
+        try:
+            actual_hash = hashlib.sha256(target.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise ModelsConfigChangedExternallyError(
+                "managed models.json could not be read before replacement"
+            ) from exc
+        if actual_hash != expected_hash:
+            raise ModelsConfigChangedExternallyError(
+                "managed models.json changed outside Pi_UI; refusing to overwrite"
+            )
 
     @staticmethod
     def _api_key_reference(settings: AgentSettings) -> str:
@@ -123,3 +194,7 @@ class PiModelsConfigManager:
         if settings.supports_reasoning_effort is not None:
             compat["supportsReasoningEffort"] = settings.supports_reasoning_effort
         return compat
+
+
+def _sha256_text(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
