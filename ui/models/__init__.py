@@ -1,6 +1,7 @@
 """Qt item models projecting controller state into QML."""
 
 from .message_model import MessageListModel
+from .preflight_model import PreflightListModel
 from .profile_model import AgentProfileListModel
 
-__all__ = ["AgentProfileListModel", "MessageListModel"]
+__all__ = ["AgentProfileListModel", "MessageListModel", "PreflightListModel"]

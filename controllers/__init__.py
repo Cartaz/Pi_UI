@@ -9,6 +9,7 @@ from .agent_controller import (
     MessageState,
     RuntimeProfileSource,
 )
+from .preflight_controller import PreflightController, PreflightControllerError
 
 __all__ = [
     "AgentController",
@@ -17,5 +18,7 @@ __all__ = [
     "ConnectionState",
     "ConversationMessage",
     "MessageState",
+    "PreflightController",
+    "PreflightControllerError",
     "RuntimeProfileSource",
 ]
