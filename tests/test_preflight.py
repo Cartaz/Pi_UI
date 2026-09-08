@@ -62,8 +62,8 @@ def test_linux_plan_discovers_host_probes_without_mutating_workspace(tmp_path: P
     workspace.mkdir()
     runtime_root = tmp_path / "runtime"
     pi = _make_executable(runtime_root / "bin" / "pi")
+    node = _make_executable(runtime_root / "bin" / "node")
     bwrap = _make_executable(tmp_path / "bin" / "bwrap")
-    node = _make_executable(tmp_path / "bin" / "node")
     models_path = workspace / ".pi-agent" / "models.json"
     existing = ExistingModelsConfig(
         path=models_path,
@@ -95,6 +95,32 @@ def test_linux_plan_discovers_host_probes_without_mutating_workspace(tmp_path: P
     assert dict(plan.environment)["PI_OFFLINE"] == "1"
     assert dict(plan.environment)["PI_SKIP_VERSION_CHECK"] == "1"
     assert not (workspace / ".pi-agent").exists()
+
+
+def test_host_node_outside_mounted_trees_is_blocking_for_sandbox(tmp_path: Path) -> None:
+    workspace = tmp_path / "AIOS"
+    workspace.mkdir()
+    runtime_root = tmp_path / "runtime"
+    pi = _make_executable(runtime_root / "bin" / "pi")
+    bwrap = _make_executable(tmp_path / "bin" / "bwrap")
+    host_only_node = _make_executable(tmp_path / "home" / "tester" / ".local" / "bin" / "node")
+    settings = AgentSettings(
+        executable=str(pi),
+        runtime_root=str(runtime_root),
+        bubblewrap_executable=str(bwrap),
+    )
+
+    plan = PreflightPlanner().build(
+        settings,
+        workspace=workspace,
+        existing_models=None,
+        facts=_facts(host_only_node),
+    )
+    checks = {item.check_id: item for item in plan.checks}
+
+    assert checks["node"].status == PreflightStatus.FAIL
+    assert "not mounted into the sandbox" in checks["node"].summary
+    assert "node" not in {probe.probe_id for probe in plan.probes}
 
 
 def test_missing_workspace_and_disabled_sandbox_are_blocking(tmp_path: Path) -> None:
