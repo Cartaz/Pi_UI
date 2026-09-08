@@ -1,20 +1,24 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtCore import QEventLoop, QTimer
+from PySide6.QtWidgets import QApplication
 
 from core.agent.runtime import PiLaunchSpec, PiRuntimePaths
 from core.agent.transport import TransportState
 from ui.native.agent_process import QProcessAgentTransport
 
 
-def _application() -> QCoreApplication:
-    instance = QCoreApplication.instance()
+def _application() -> QApplication:
+    instance = QApplication.instance()
     if instance is not None:
         return instance
-    return QCoreApplication([])
+    return QApplication([])
 
 
 def test_shutdown_escalates_when_child_ignores_terminate(tmp_path: Path) -> None:
@@ -23,9 +27,11 @@ def test_shutdown_escalates_when_child_ignores_terminate(tmp_path: Path) -> None
     script.write_text(
         """
 import signal
+import sys
 import time
 
 signal.signal(signal.SIGTERM, lambda *_args: None)
+print("ready", file=sys.stderr, flush=True)
 while True:
     time.sleep(1)
 """.lstrip(),
@@ -51,17 +57,24 @@ while True:
 
     states: list[TransportState] = []
     errors: list[BaseException] = []
+    diagnostics: list[str] = []
     loop = QEventLoop()
     watchdog = QTimer()
     watchdog.setSingleShot(True)
     timed_out = False
+    stop_requested = False
 
     def on_state(state: TransportState) -> None:
         states.append(state)
-        if state == TransportState.READY:
-            transport.stop()
-        elif state in {TransportState.STOPPED, TransportState.FAILED}:
+        if state in {TransportState.STOPPED, TransportState.FAILED}:
             loop.quit()
+
+    def on_diagnostic(text: str) -> None:
+        nonlocal stop_requested
+        diagnostics.append(text)
+        if "ready" in "".join(diagnostics) and not stop_requested:
+            stop_requested = True
+            transport.stop()
 
     def on_watchdog() -> None:
         nonlocal timed_out
@@ -69,6 +82,7 @@ while True:
         loop.quit()
 
     transport.set_state_handler(on_state)
+    transport.set_diagnostic_handler(on_diagnostic)
     transport.set_error_handler(errors.append)
     watchdog.timeout.connect(on_watchdog)
     watchdog.start(3_000)
@@ -78,6 +92,8 @@ while True:
 
     assert timed_out is False
     assert errors == []
+    assert stop_requested is True
+    assert "ready" in "".join(diagnostics)
     assert states[0] == TransportState.STARTING
     assert TransportState.READY in states
     assert TransportState.STOPPING in states
