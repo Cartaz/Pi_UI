@@ -15,7 +15,11 @@ from core.agent.runtime import PiLaunchSpec
 from core.settings import SettingsStore
 from ui.adapters import AgentAdapter
 from ui.models import AgentProfileListModel, MessageListModel
-from ui.native import QProcessAgentTransport, QtDeadlineScheduler
+from ui.native import (
+    AppShutdownCoordinator,
+    QProcessAgentTransport,
+    QtDeadlineScheduler,
+)
 
 LOGGER = logging.getLogger("pi_ui")
 
@@ -78,6 +82,19 @@ def main() -> int:
         controller.shutdown()
         return 1
 
+    shutdown_coordinator = AppShutdownCoordinator(
+        controller,
+        timeout_ms=settings.agent.shutdown_timeout_ms + 2_000,
+        parent=app,
+    )
+    shutdown_coordinator.forcedTimeout.connect(LOGGER.error)
+    shutdown_coordinator.finished.connect(app.quit)
+    agent_adapter.stateChanged.connect(shutdown_coordinator.notify_state_changed)
+
+    # Keep the event loop alive after the last window closes so QProcess can
+    # complete its asynchronous terminate -> timeout -> kill lifecycle.
+    app.setQuitOnLastWindowClosed(False)
+    app.lastWindowClosed.connect(shutdown_coordinator.request_shutdown)
     app.aboutToQuit.connect(controller.shutdown)
     return app.exec()
 
