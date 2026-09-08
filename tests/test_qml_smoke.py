@@ -9,10 +9,12 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication
 
 from controllers.agent_controller import AgentController
+from controllers.preflight_controller import PreflightController
 from core.agent.runtime import PiLaunchSpec
+from core.preflight import HostRuntimeFacts
 from core.settings import AppSettings, SettingsStore
-from ui.adapters import AgentAdapter
-from ui.models import AgentProfileListModel, MessageListModel
+from ui.adapters import AgentAdapter, PreflightAdapter
+from ui.models import AgentProfileListModel, MessageListModel, PreflightListModel
 
 
 def _application() -> QApplication:
@@ -30,6 +32,10 @@ def _unexpected_transport(
     raise AssertionError("QML smoke test must not start Pi")
 
 
+def _unexpected_probe_runner():
+    raise AssertionError("QML smoke test must not start preflight probes")
+
+
 def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) -> None:
     app = _application()
     controller = AgentController(
@@ -37,9 +43,23 @@ def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) ->
         _unexpected_transport,
         settings=AppSettings(),
     )
+    preflight_controller = PreflightController(
+        controller,
+        _unexpected_probe_runner,
+        HostRuntimeFacts(
+            os_name="Linux",
+            os_release="test-kernel",
+            python_version="3.13.0",
+            pyside_version="6.11.2",
+            qt_version="6.11.2",
+            node_executable=None,
+        ),
+    )
     message_model = MessageListModel(controller)
     profile_model = AgentProfileListModel(controller)
+    preflight_model = PreflightListModel(preflight_controller)
     adapter = AgentAdapter(controller)
+    preflight_adapter = PreflightAdapter(preflight_controller)
 
     engine = QQmlApplicationEngine()
     qml_root = Path(__file__).resolve().parents[1] / "ui" / "qml"
@@ -49,6 +69,8 @@ def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) ->
             "agentAdapter": adapter,
             "messageModel": message_model,
             "profileModel": profile_model,
+            "preflightAdapter": preflight_adapter,
+            "preflightModel": preflight_model,
         }
     )
     warnings: list[str] = []
@@ -61,11 +83,16 @@ def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) ->
 
     roots = engine.rootObjects()
     assert roots, "QML shell failed to create a root object:\n" + "\n".join(warnings)
-    assert roots[0].property("title") == "Pi_UI"
-    assert roots[0].property("agentAdapter") is not None
+    root = roots[0]
+    assert root.property("title") == "Pi_UI"
+    assert root.property("agentAdapter") is not None
+    assert root.property("preflightAdapter") is not None
+    assert root.property("preflightModel") is not None
+    assert preflight_controller.status_text == "Preflight not run"
     assert not warnings, "QML warnings:\n" + "\n".join(warnings)
 
-    roots[0].setProperty("visible", False)
+    root.setProperty("visible", False)
+    preflight_controller.cancel()
     controller.shutdown()
     engine.deleteLater()
     app.processEvents()
