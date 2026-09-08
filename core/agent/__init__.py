@@ -1,5 +1,11 @@
 """Pi Agent protocol, state and transport abstractions."""
 
+from .bootstrap import (
+    MissingRuntimeCredentialError,
+    PiRuntimeBootstrap,
+    PiRuntimeBootstrapError,
+    PreparedPiRuntime,
+)
 from .client import AgentClient, AgentClientError, TurnState
 from .model_config import (
     LOCAL_AUTH_PLACEHOLDER,
@@ -28,12 +34,16 @@ __all__ = [
     "JsonlProtocolError",
     "LOCAL_AUTH_PLACEHOLDER",
     "MANAGED_MARKER_FILENAME",
+    "MissingRuntimeCredentialError",
     "ModelConfigError",
     "ModelsConfigChangedExternallyError",
     "ModelsConfigWriteResult",
     "PiLaunchSpec",
     "PiModelsConfigManager",
+    "PiRuntimeBootstrap",
+    "PiRuntimeBootstrapError",
     "PiRuntimePaths",
+    "PreparedPiRuntime",
     "RuntimeConfigurationError",
     "TransportState",
     "TurnState",
