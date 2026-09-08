@@ -1,0 +1,268 @@
+"""Typed application settings with XDG paths and atomic persistence."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import tempfile
+import time
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any, Final
+from urllib.parse import urlsplit
+
+APP_DIR_NAME: Final = "pi-ui"
+CURRENT_SCHEMA_VERSION: Final = 1
+_ENV_NAME_RE: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+class SettingsError(RuntimeError):
+    """Base class for settings failures."""
+
+
+class SettingsValidationError(SettingsError):
+    """Raised when a settings payload violates the supported schema."""
+
+
+@dataclass(frozen=True, slots=True)
+class SettingsRecovery:
+    """Describes a malformed settings file preserved during recovery."""
+
+    quarantined_path: Path
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class AgentSettings:
+    """Pi runtime configuration owned by Pi_UI.
+
+    Secrets are deliberately not stored here. ``api_key_env`` names an
+    environment variable that can be injected into Pi when the runtime starts.
+    """
+
+    executable: str = "pi"
+    provider: str | None = None
+    model: str | None = None
+    base_url: str | None = None
+    api: str = "openai-completions"
+    api_key_env: str | None = None
+    context_window: int | None = None
+    max_tokens: int | None = None
+    thinking_level: str | None = None
+    skip_version_check: bool = True
+    offline_startup: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class AppSettings:
+    schema_version: int = CURRENT_SCHEMA_VERSION
+    workspace_root: str | None = None
+    agent: AgentSettings = field(default_factory=AgentSettings)
+
+
+def default_config_dir(env: dict[str, str] | None = None) -> Path:
+    values = os.environ if env is None else env
+    xdg = values.get("XDG_CONFIG_HOME")
+    if xdg:
+        return Path(xdg) / APP_DIR_NAME
+    return Path(values.get("HOME", str(Path.home()))) / ".config" / APP_DIR_NAME
+
+
+def default_data_dir(env: dict[str, str] | None = None) -> Path:
+    values = os.environ if env is None else env
+    xdg = values.get("XDG_DATA_HOME")
+    if xdg:
+        return Path(xdg) / APP_DIR_NAME
+    return Path(values.get("HOME", str(Path.home()))) / ".local" / "share" / APP_DIR_NAME
+
+
+def default_state_dir(env: dict[str, str] | None = None) -> Path:
+    values = os.environ if env is None else env
+    xdg = values.get("XDG_STATE_HOME")
+    if xdg:
+        return Path(xdg) / APP_DIR_NAME
+    return Path(values.get("HOME", str(Path.home()))) / ".local" / "state" / APP_DIR_NAME
+
+
+class SettingsStore:
+    """Single owner for Pi_UI's persisted application settings."""
+
+    def __init__(self, path: Path | None = None) -> None:
+        self.path = path or (default_config_dir() / "settings.json")
+        self.last_recovery: SettingsRecovery | None = None
+
+    def load(self) -> AppSettings:
+        self.last_recovery = None
+        if not self.path.exists():
+            return AppSettings()
+
+        try:
+            text = self.path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise SettingsError(f"cannot read settings from {self.path}") from exc
+
+        try:
+            raw = json.loads(text)
+            return _parse_settings(raw)
+        except (json.JSONDecodeError, SettingsValidationError) as exc:
+            quarantined = self._quarantine_invalid_file()
+            self.last_recovery = SettingsRecovery(
+                quarantined_path=quarantined,
+                reason=str(exc),
+            )
+            return AppSettings()
+
+    def save(self, settings: AppSettings) -> None:
+        validated = _parse_settings(asdict(settings))
+        payload = json.dumps(
+            asdict(validated),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        ) + "\n"
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f".{self.path.name}.",
+            suffix=".tmp",
+            dir=self.path.parent,
+            text=True,
+        )
+        temp_path = Path(temp_name)
+
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, self.path)
+            _fsync_directory(self.path.parent)
+        except BaseException:
+            temp_path.unlink(missing_ok=True)
+            raise
+
+    def _quarantine_invalid_file(self) -> Path:
+        suffix = f".invalid-{time.time_ns()}"
+        quarantined = self.path.with_name(self.path.name + suffix)
+        try:
+            os.replace(self.path, quarantined)
+            _fsync_directory(self.path.parent)
+        except OSError as exc:
+            raise SettingsError(
+                f"settings are invalid and could not be preserved: {self.path}"
+            ) from exc
+        return quarantined
+
+
+def _parse_settings(raw: Any) -> AppSettings:
+    if not isinstance(raw, dict):
+        raise SettingsValidationError("settings root must be a JSON object")
+
+    allowed_root = {"schema_version", "workspace_root", "agent"}
+    unknown_root = set(raw) - allowed_root
+    if unknown_root:
+        raise SettingsValidationError(
+            f"unknown settings keys: {', '.join(sorted(unknown_root))}"
+        )
+
+    schema_version = raw.get("schema_version", CURRENT_SCHEMA_VERSION)
+    if schema_version != CURRENT_SCHEMA_VERSION:
+        raise SettingsValidationError(
+            f"unsupported settings schema version: {schema_version!r}"
+        )
+
+    workspace_root = raw.get("workspace_root")
+    if workspace_root is not None:
+        if not isinstance(workspace_root, str) or not workspace_root.strip():
+            raise SettingsValidationError(
+                "workspace_root must be a non-empty string or null"
+            )
+
+    agent_raw = raw.get("agent", {})
+    if not isinstance(agent_raw, dict):
+        raise SettingsValidationError("agent settings must be a JSON object")
+
+    agent = _parse_agent_settings(agent_raw)
+    return AppSettings(
+        schema_version=CURRENT_SCHEMA_VERSION,
+        workspace_root=workspace_root,
+        agent=agent,
+    )
+
+
+def _parse_agent_settings(raw: dict[str, Any]) -> AgentSettings:
+    defaults = AgentSettings()
+    allowed = set(asdict(defaults))
+    unknown = set(raw) - allowed
+    if unknown:
+        raise SettingsValidationError(
+            f"unknown agent settings keys: {', '.join(sorted(unknown))}"
+        )
+
+    values = asdict(defaults)
+    values.update(raw)
+
+    _require_non_empty_string(values, "executable")
+    _optional_non_empty_string(values, "provider")
+    _optional_non_empty_string(values, "model")
+    _optional_non_empty_string(values, "base_url")
+    _require_non_empty_string(values, "api")
+    _optional_non_empty_string(values, "api_key_env")
+    _optional_non_empty_string(values, "thinking_level")
+
+    if values["base_url"] is not None:
+        _validate_base_url(values["base_url"])
+    if values["api_key_env"] is not None and not _ENV_NAME_RE.fullmatch(
+        values["api_key_env"]
+    ):
+        raise SettingsValidationError("api_key_env must be an environment variable name")
+
+    for key in ("context_window", "max_tokens"):
+        value = values[key]
+        if value is not None and (
+            not isinstance(value, int) or isinstance(value, bool) or value <= 0
+        ):
+            raise SettingsValidationError(f"{key} must be a positive integer or null")
+
+    for key in ("skip_version_check", "offline_startup"):
+        if not isinstance(values[key], bool):
+            raise SettingsValidationError(f"{key} must be a boolean")
+
+    return AgentSettings(**values)
+
+
+def _validate_base_url(value: str) -> None:
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise SettingsValidationError("base_url must be an absolute http(s) URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise SettingsValidationError("base_url must not contain credentials")
+
+
+def _require_non_empty_string(values: dict[str, Any], key: str) -> None:
+    value = values[key]
+    if not isinstance(value, str) or not value.strip():
+        raise SettingsValidationError(f"{key} must be a non-empty string")
+
+
+def _optional_non_empty_string(values: dict[str, Any], key: str) -> None:
+    value = values[key]
+    if value is not None and (not isinstance(value, str) or not value.strip()):
+        raise SettingsValidationError(f"{key} must be a non-empty string or null")
+
+
+def _fsync_directory(path: Path) -> None:
+    """Best-effort directory fsync on POSIX after atomic replacement."""
+
+    if os.name != "posix":
+        return
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    directory_fd = os.open(path, flags)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
