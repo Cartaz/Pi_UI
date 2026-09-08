@@ -8,6 +8,7 @@ from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
+from .deadlines import DeadlineHandle, DeadlineScheduler
 from .transport import AgentTransport, TransportState
 
 JsonObject = dict[str, Any]
@@ -22,6 +23,27 @@ IdFactory = Callable[[], str]
 
 class AgentClientError(RuntimeError):
     """Raised when a Pi RPC command cannot be represented safely."""
+
+
+class AgentRequestTimeoutError(AgentClientError):
+    """Raised when Pi does not acknowledge one correlated RPC request in time."""
+
+    def __init__(self, request_id: str, command: str, timeout_ms: int) -> None:
+        self.request_id = request_id
+        self.command = command
+        self.timeout_ms = timeout_ms
+        super().__init__(
+            f"Pi did not acknowledge {command!r} request {request_id!r} "
+            f"within {timeout_ms} ms"
+        )
+
+
+class AgentInactivityTimeoutError(AgentClientError):
+    """Raised as a non-destructive watchdog when an active turn is silent."""
+
+    def __init__(self, timeout_ms: int) -> None:
+        self.timeout_ms = timeout_ms
+        super().__init__(f"Pi turn produced no RPC activity for {timeout_ms} ms")
 
 
 class TurnState(StrEnum):
@@ -39,17 +61,45 @@ class PendingRequest:
 
 
 class AgentClient:
-    """Own request correlation and turn lifecycle for one Pi RPC session."""
+    """Own request correlation and turn lifecycle for one Pi RPC session.
+
+    Request deadlines only describe whether the RPC acknowledgement arrived;
+    they never imply that a command was not executed. Inactivity deadlines are
+    a watchdog only: they notify the caller without killing Pi or retrying work.
+    """
+
+    _TURN_COMMANDS = frozenset({"prompt", "steer", "follow_up", "clear_queue", "abort"})
 
     def __init__(
         self,
         transport: AgentTransport,
         *,
         id_factory: IdFactory | None = None,
+        deadline_scheduler: DeadlineScheduler | None = None,
+        request_timeout_ms: int | None = None,
+        inactivity_timeout_ms: int | None = None,
     ) -> None:
+        if deadline_scheduler is None and (
+            request_timeout_ms is not None or inactivity_timeout_ms is not None
+        ):
+            raise ValueError("deadline_scheduler is required when client timeouts are enabled")
+        for name, value in (
+            ("request_timeout_ms", request_timeout_ms),
+            ("inactivity_timeout_ms", inactivity_timeout_ms),
+        ):
+            if value is not None and (
+                not isinstance(value, int) or isinstance(value, bool) or value <= 0
+            ):
+                raise ValueError(f"{name} must be a positive integer or None")
+
         self._transport = transport
         self._id_factory = id_factory or (lambda: uuid4().hex)
+        self._deadline_scheduler = deadline_scheduler
+        self._request_timeout_ms = request_timeout_ms
+        self._inactivity_timeout_ms = inactivity_timeout_ms
         self._pending: dict[str, PendingRequest] = {}
+        self._request_deadlines: dict[str, DeadlineHandle] = {}
+        self._inactivity_deadline: DeadlineHandle | None = None
         self._turn_state = TurnState.IDLE
         self._event_handler: RecordHandler = lambda _record: None
         self._response_handler: RecordHandler = lambda _record: None
@@ -59,6 +109,12 @@ class AgentClient:
         self._turn_state_handler: TurnStateHandler = lambda _state: None
         self._transport_state_handler: TransportStateHandler = lambda _state: None
         self._error_handler: ErrorHandler = lambda _error: None
+        self._request_timeout_handler: Callable[[AgentRequestTimeoutError], None] = (
+            lambda error: self._error_handler(error)
+        )
+        self._inactivity_timeout_handler: Callable[[AgentInactivityTimeoutError], None] = (
+            lambda error: self._error_handler(error)
+        )
 
         transport.set_record_handler(self._on_record)
         transport.set_error_handler(self._on_transport_error)
@@ -94,10 +150,24 @@ class AgentClient:
     def set_error_handler(self, handler: ErrorHandler) -> None:
         self._error_handler = handler
 
+    def set_request_timeout_handler(
+        self,
+        handler: Callable[[AgentRequestTimeoutError], None],
+    ) -> None:
+        self._request_timeout_handler = handler
+
+    def set_inactivity_timeout_handler(
+        self,
+        handler: Callable[[AgentInactivityTimeoutError], None],
+    ) -> None:
+        self._inactivity_timeout_handler = handler
+
     def start(self) -> None:
         self._transport.start()
 
     def shutdown(self) -> None:
+        self._cancel_all_deadlines()
+        self._pending.clear()
         self._transport.stop()
 
     def prompt(
@@ -161,6 +231,7 @@ class AgentClient:
         except BaseException:
             self._pending.pop(request_id, None)
             raise
+        self._arm_request_deadline(request_id)
         return request_id
 
     def _next_request_id(self) -> str:
@@ -174,6 +245,7 @@ class AgentClient:
     def _on_record(self, record: JsonObject) -> None:
         if record.get("type") == "response":
             self._on_response(record)
+            self._note_activity()
             return
 
         event_type = record.get("type")
@@ -181,11 +253,14 @@ class AgentClient:
             self._set_turn_state(TurnState.RUNNING)
         elif event_type == "agent_settled":
             self._set_turn_state(TurnState.IDLE)
+        self._note_activity()
         self._event_handler(record)
 
     def _on_response(self, response: JsonObject) -> None:
         request_id = response.get("id")
         pending = self._pending.pop(request_id, None) if isinstance(request_id, str) else None
+        if isinstance(request_id, str):
+            self._cancel_request_deadline(request_id)
 
         self._response_handler(response)
         if pending and pending.callback:
@@ -207,22 +282,101 @@ class AgentClient:
             self._set_turn_state(TurnState.FAILED)
             self._error_handler(AgentClientError("Pi rejected abort command"))
 
+    def _arm_request_deadline(self, request_id: str) -> None:
+        scheduler = self._deadline_scheduler
+        timeout_ms = self._request_timeout_ms
+        if scheduler is None or timeout_ms is None:
+            return
+        self._cancel_request_deadline(request_id)
+        self._request_deadlines[request_id] = scheduler.call_later(
+            timeout_ms,
+            lambda: self._on_request_timeout(request_id),
+        )
+
+    def _cancel_request_deadline(self, request_id: str) -> None:
+        handle = self._request_deadlines.pop(request_id, None)
+        if handle is not None:
+            handle.cancel()
+
+    def _on_request_timeout(self, request_id: str) -> None:
+        self._request_deadlines.pop(request_id, None)
+        pending = self._pending.pop(request_id, None)
+        if pending is None or self._request_timeout_ms is None:
+            return
+        if pending.command in self._TURN_COMMANDS:
+            self._set_turn_state(TurnState.FAILED)
+        self._request_timeout_handler(
+            AgentRequestTimeoutError(
+                request_id=request_id,
+                command=pending.command,
+                timeout_ms=self._request_timeout_ms,
+            )
+        )
+
+    def _note_activity(self) -> None:
+        if self._turn_state in {TurnState.RUNNING, TurnState.CANCELLING}:
+            self._arm_inactivity_deadline()
+
+    def _arm_inactivity_deadline(self) -> None:
+        self._cancel_inactivity_deadline()
+        scheduler = self._deadline_scheduler
+        timeout_ms = self._inactivity_timeout_ms
+        if scheduler is None or timeout_ms is None:
+            return
+        self._inactivity_deadline = scheduler.call_later(
+            timeout_ms,
+            self._on_inactivity_timeout,
+        )
+
+    def _cancel_inactivity_deadline(self) -> None:
+        handle = self._inactivity_deadline
+        self._inactivity_deadline = None
+        if handle is not None:
+            handle.cancel()
+
+    def _on_inactivity_timeout(self) -> None:
+        self._inactivity_deadline = None
+        timeout_ms = self._inactivity_timeout_ms
+        if timeout_ms is None or self._turn_state not in {
+            TurnState.RUNNING,
+            TurnState.CANCELLING,
+        }:
+            return
+        self._inactivity_timeout_handler(AgentInactivityTimeoutError(timeout_ms))
+
+    def _cancel_all_deadlines(self) -> None:
+        for handle in tuple(self._request_deadlines.values()):
+            handle.cancel()
+        self._request_deadlines.clear()
+        self._cancel_inactivity_deadline()
+
     def _on_transport_error(self, error: BaseException) -> None:
+        self._cancel_all_deadlines()
+        self._pending.clear()
         if self._turn_state != TurnState.IDLE:
             self._set_turn_state(TurnState.FAILED)
         self._error_handler(error)
 
     def _on_transport_state(self, state: TransportState) -> None:
         if state == TransportState.FAILED:
+            self._cancel_all_deadlines()
+            self._pending.clear()
             self._set_turn_state(TurnState.FAILED)
-        elif state == TransportState.STOPPED and self._turn_state != TurnState.FAILED:
-            self._set_turn_state(TurnState.IDLE)
+        elif state == TransportState.STOPPED:
+            self._cancel_all_deadlines()
+            self._pending.clear()
+            if self._turn_state != TurnState.FAILED:
+                self._set_turn_state(TurnState.IDLE)
         self._transport_state_handler(state)
 
     def _set_turn_state(self, state: TurnState) -> None:
         if state == self._turn_state:
             return
         self._turn_state = state
+        if state in {TurnState.RUNNING, TurnState.CANCELLING}:
+            self._arm_inactivity_deadline()
+        else:
+            self._cancel_inactivity_deadline()
         self._turn_state_handler(state)
 
 
