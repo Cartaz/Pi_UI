@@ -8,6 +8,7 @@ from typing import Any, Protocol
 
 JsonObject = dict[str, Any]
 RecordHandler = Callable[[JsonObject], None]
+DiagnosticHandler = Callable[[str], None]
 ErrorHandler = Callable[[BaseException], None]
 StateHandler = Callable[["TransportState"], None]
 
@@ -31,6 +32,8 @@ class AgentTransport(Protocol):
     def state(self) -> TransportState: ...
 
     def set_record_handler(self, handler: RecordHandler) -> None: ...
+
+    def set_diagnostic_handler(self, handler: DiagnosticHandler) -> None: ...
 
     def set_error_handler(self, handler: ErrorHandler) -> None: ...
 
