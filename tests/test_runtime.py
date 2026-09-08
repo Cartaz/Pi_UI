@@ -55,7 +55,8 @@ def test_sandbox_launch_spec_matches_aios_confinement(tmp_path: Path) -> None:
     assert _contains_triplet(args, "--symlink", "usr/lib64", "/lib64")
     assert "--tmpfs" in args
     assert "/home" in args
-    assert "/home/tester" in args
+    assert "/home/aios" in args
+    assert "/home/tester" not in args
 
     bind_index = args.index("--bind")
     assert args[bind_index + 1 : bind_index + 3] == (
@@ -78,7 +79,7 @@ def test_sandbox_launch_spec_matches_aios_confinement(tmp_path: Path) -> None:
     )
 
     assert spec.environment == {
-        "HOME": "/home/tester",
+        "HOME": "/home/aios",
         "PATH": "/opt/pi-agent/bin:/usr/bin:/bin",
         "LANG": "it_IT.UTF-8",
         "PI_CODING_AGENT_DIR": "/workspace/.pi-agent",
@@ -88,6 +89,7 @@ def test_sandbox_launch_spec_matches_aios_confinement(tmp_path: Path) -> None:
     }
     assert "SSH_AUTH_SOCK" not in spec.environment
     assert "DISPLAY" not in spec.environment
+    assert "USER" not in spec.environment
     assert "not-on-the-command-line" not in "\0".join(args)
 
 
