@@ -5,6 +5,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from core.sandbox import (
+    SANDBOX_HOME,
     SandboxConfigurationError,
     build_bubblewrap_arguments,
     command_is_visible_in_sandbox,
@@ -28,7 +29,6 @@ def test_canonical_policy_exposes_only_declared_runtime_and_workspace(tmp_path: 
         settings,
         host_workspace=workspace,
         sandbox_workspace=PurePosixPath("/workspace"),
-        sandbox_home=PurePosixPath("/home/tester"),
         command=command,
     )
 
@@ -41,6 +41,8 @@ def test_canonical_policy_exposes_only_declared_runtime_and_workspace(tmp_path: 
     assert _contains_triplet(args, "--ro-bind", "/usr", "/usr")
     assert _contains_triplet(args, "--ro-bind", str(runtime_root), str(runtime_root))
     assert _contains_triplet(args, "--bind", str(workspace.resolve()), "/workspace")
+    assert "--dir" in args
+    assert str(SANDBOX_HOME) in args
     assert "/run/user" not in args
     assert str(tmp_path.parent) not in args
     separator = args.index("--")
@@ -82,7 +84,6 @@ def test_policy_rejects_command_from_unmounted_host_tree(tmp_path: Path) -> None
             settings,
             host_workspace=workspace,
             sandbox_workspace=PurePosixPath("/workspace"),
-            sandbox_home=PurePosixPath("/home/tester"),
             command=(str(tmp_path / "private" / "node"),),
         )
 
@@ -118,7 +119,6 @@ def test_policy_rejects_overbroad_runtime_mounts(tmp_path: Path, runtime_root: s
             settings,
             host_workspace=workspace,
             sandbox_workspace=PurePosixPath("/workspace"),
-            sandbox_home=PurePosixPath("/home/tester"),
             command=(settings.executable,),
         )
 
@@ -137,7 +137,6 @@ def test_policy_rejects_runtime_overlapping_writable_workspace(tmp_path: Path) -
             settings,
             host_workspace=workspace,
             sandbox_workspace=PurePosixPath("/workspace"),
-            sandbox_home=PurePosixPath("/home/tester"),
             command=(settings.executable,),
         )
 
