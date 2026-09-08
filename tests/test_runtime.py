@@ -21,6 +21,7 @@ def test_sandbox_launch_spec_matches_aios_confinement(tmp_path: Path) -> None:
             provider="ornith-lan",
             model="ornith-1.5",
             thinking_level="high",
+            auth_mode="env",
             api_key_env=secret_name,
         ),
         working_directory=tmp_path,
