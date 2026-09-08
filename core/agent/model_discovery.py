@@ -10,7 +10,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from .model_config import LOCAL_AUTH_PLACEHOLDER, MANAGED_MARKER_FILENAME, ModelConfigError
+from .model_config import LOCAL_AUTH_PLACEHOLDER, MANAGED_MARKER_FILENAME
 from .runtime import PiRuntimePaths
 
 _ENV_REFERENCE_RE = re.compile(r"^\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})$")
@@ -49,12 +49,19 @@ class DiscoveredModelProfile:
 @dataclass(frozen=True, slots=True)
 class ExistingModelsConfig:
     path: Path
+    sha256: str | None
     management_state: ModelConfigManagementState
     profiles: tuple[DiscoveredModelProfile, ...]
 
 
 class PiModelsConfigDiscovery:
-    """Inspect the current runtime config without returning literal credentials."""
+    """Inspect the current runtime config without returning literal credentials.
+
+    Discovery is deliberately non-mutating and resilient. A present but invalid
+    ``models.json`` is treated as externally changed with no usable profiles so
+    the desktop shell can remain open while refusing to launch Pi from an
+    ambiguous baseline.
+    """
 
     def inspect(self, paths: PiRuntimePaths) -> ExistingModelsConfig:
         target = paths.host_agent_dir / "models.json"
@@ -62,6 +69,7 @@ class PiModelsConfigDiscovery:
         if not target.exists():
             return ExistingModelsConfig(
                 path=target,
+                sha256=None,
                 management_state=(
                     ModelConfigManagementState.CHANGED_EXTERNALLY
                     if marker.exists()
@@ -71,16 +79,38 @@ class PiModelsConfigDiscovery:
             )
 
         try:
-            raw = json.loads(target.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise ModelConfigError(f"existing Pi models config is invalid: {target}") from exc
+            raw_bytes = target.read_bytes()
+        except OSError:
+            return ExistingModelsConfig(
+                path=target,
+                sha256=None,
+                management_state=ModelConfigManagementState.CHANGED_EXTERNALLY,
+                profiles=(),
+            )
+
+        digest = hashlib.sha256(raw_bytes).hexdigest()
+        try:
+            raw = json.loads(raw_bytes.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError):
+            return ExistingModelsConfig(
+                path=target,
+                sha256=digest,
+                management_state=ModelConfigManagementState.CHANGED_EXTERNALLY,
+                profiles=(),
+            )
         if not isinstance(raw, dict):
-            raise ModelConfigError("existing Pi models config root must be an object")
+            return ExistingModelsConfig(
+                path=target,
+                sha256=digest,
+                management_state=ModelConfigManagementState.CHANGED_EXTERNALLY,
+                profiles=(),
+            )
 
         profiles = tuple(self._profiles(raw))
         return ExistingModelsConfig(
             path=target,
-            management_state=self._management_state(target, marker),
+            sha256=digest,
+            management_state=self._management_state(target, marker, digest),
             profiles=profiles,
         )
 
@@ -133,6 +163,7 @@ class PiModelsConfigDiscovery:
     def _management_state(
         target: Path,
         marker: Path,
+        actual_hash: str,
     ) -> ModelConfigManagementState:
         if not marker.exists():
             return ModelConfigManagementState.UNMANAGED
@@ -146,7 +177,6 @@ class PiModelsConfigDiscovery:
                 or not isinstance(expected_hash, str)
             ):
                 return ModelConfigManagementState.CHANGED_EXTERNALLY
-            actual_hash = hashlib.sha256(target.read_bytes()).hexdigest()
         except (OSError, UnicodeError, json.JSONDecodeError):
             return ModelConfigManagementState.CHANGED_EXTERNALLY
         return (

@@ -15,6 +15,7 @@ ResponseCallback = Callable[[JsonObject], None]
 RecordHandler = Callable[[JsonObject], None]
 QueueClearedHandler = Callable[[tuple[str, ...], tuple[str, ...]], None]
 TurnStateHandler = Callable[["TurnState"], None]
+TransportStateHandler = Callable[[TransportState], None]
 ErrorHandler = Callable[[BaseException], None]
 IdFactory = Callable[[], str]
 
@@ -56,6 +57,7 @@ class AgentClient:
             lambda _steering, _follow_up: None
         )
         self._turn_state_handler: TurnStateHandler = lambda _state: None
+        self._transport_state_handler: TransportStateHandler = lambda _state: None
         self._error_handler: ErrorHandler = lambda _error: None
 
         transport.set_record_handler(self._on_record)
@@ -85,6 +87,9 @@ class AgentClient:
 
     def set_turn_state_handler(self, handler: TurnStateHandler) -> None:
         self._turn_state_handler = handler
+
+    def set_transport_state_handler(self, handler: TransportStateHandler) -> None:
+        self._transport_state_handler = handler
 
     def set_error_handler(self, handler: ErrorHandler) -> None:
         self._error_handler = handler
@@ -118,6 +123,9 @@ class AgentClient:
 
     def get_state(self, callback: ResponseCallback | None = None) -> str:
         return self._send({"type": "get_state"}, callback=callback)
+
+    def get_messages(self, callback: ResponseCallback | None = None) -> str:
+        return self._send({"type": "get_messages"}, callback=callback)
 
     def request_stop(self) -> str:
         """Clear queued input first, then abort the active operation.
@@ -200,18 +208,19 @@ class AgentClient:
             self._error_handler(AgentClientError("Pi rejected abort command"))
 
     def _on_transport_error(self, error: BaseException) -> None:
-        if self._turn_state is not TurnState.IDLE:
+        if self._turn_state != TurnState.IDLE:
             self._set_turn_state(TurnState.FAILED)
         self._error_handler(error)
 
     def _on_transport_state(self, state: TransportState) -> None:
-        if state is TransportState.FAILED:
+        if state == TransportState.FAILED:
             self._set_turn_state(TurnState.FAILED)
-        elif state is TransportState.STOPPED and self._turn_state is not TurnState.FAILED:
+        elif state == TransportState.STOPPED and self._turn_state != TurnState.FAILED:
             self._set_turn_state(TurnState.IDLE)
+        self._transport_state_handler(state)
 
     def _set_turn_state(self, state: TurnState) -> None:
-        if state is self._turn_state:
+        if state == self._turn_state:
             return
         self._turn_state = state
         self._turn_state_handler(state)

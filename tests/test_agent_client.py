@@ -39,7 +39,7 @@ class FakeTransport:
         self._state_handler(self._state)
 
     def send(self, command: Mapping[str, Any]) -> None:
-        if self._state is not TransportState.READY:
+        if self._state != TransportState.READY:
             raise RuntimeError("not ready")
         self.sent.append(dict(command))
 
@@ -79,7 +79,7 @@ def test_prompt_response_acceptance_is_not_turn_completion() -> None:
     assert transport.sent == [{"type": "prompt", "message": "hello", "id": "req-1"}]
 
     transport.emit_record({"type": "agent_start"})
-    assert client.turn_state is TurnState.RUNNING
+    assert client.turn_state == TurnState.RUNNING
 
     transport.emit_record(
         {
@@ -89,16 +89,51 @@ def test_prompt_response_acceptance_is_not_turn_completion() -> None:
             "success": True,
         }
     )
-    assert client.turn_state is TurnState.RUNNING
+    assert client.turn_state == TurnState.RUNNING
     assert client.pending_request_ids == ()
     assert responses[-1]["success"] is True
 
     transport.emit_record({"type": "agent_end", "messages": []})
-    assert client.turn_state is TurnState.RUNNING
+    assert client.turn_state == TurnState.RUNNING
 
     transport.emit_record({"type": "agent_settled"})
-    assert client.turn_state is TurnState.IDLE
+    assert client.turn_state == TurnState.IDLE
     assert states == [TurnState.RUNNING, TurnState.IDLE]
+
+
+def test_get_messages_is_correlated_and_callback_receives_response() -> None:
+    transport = FakeTransport()
+    client = AgentClient(transport, id_factory=id_sequence())
+    responses: list[dict[str, Any]] = []
+    client.start()
+
+    request_id = client.get_messages(responses.append)
+    assert request_id == "req-1"
+    assert transport.sent[-1] == {"type": "get_messages", "id": "req-1"}
+
+    response = {
+        "id": "req-1",
+        "type": "response",
+        "command": "get_messages",
+        "success": True,
+        "data": {"messages": [{"role": "user", "content": "hello"}]},
+    }
+    transport.emit_record(response)
+
+    assert responses == [response]
+    assert client.pending_request_ids == ()
+
+
+def test_transport_state_changes_are_exposed_to_controller() -> None:
+    transport = FakeTransport()
+    client = AgentClient(transport, id_factory=id_sequence())
+    states: list[TransportState] = []
+    client.set_transport_state_handler(states.append)
+
+    client.start()
+    client.shutdown()
+
+    assert states == [TransportState.READY, TransportState.STOPPED]
 
 
 def test_stop_clears_queue_before_abort_and_restores_text() -> None:
@@ -110,7 +145,7 @@ def test_stop_clears_queue_before_abort_and_restores_text() -> None:
 
     clear_id = client.request_stop()
     assert clear_id == "req-1"
-    assert client.turn_state is TurnState.CANCELLING
+    assert client.turn_state == TurnState.CANCELLING
     assert transport.sent[-1] == {"type": "clear_queue", "id": "req-1"}
 
     transport.emit_record(
@@ -137,10 +172,10 @@ def test_stop_clears_queue_before_abort_and_restores_text() -> None:
             "success": True,
         }
     )
-    assert client.turn_state is TurnState.CANCELLING
+    assert client.turn_state == TurnState.CANCELLING
 
     transport.emit_record({"type": "agent_settled"})
-    assert client.turn_state is TurnState.IDLE
+    assert client.turn_state == TurnState.IDLE
 
 
 def test_prompt_streaming_behavior_is_validated() -> None:
@@ -160,5 +195,5 @@ def test_transport_failure_marks_active_turn_failed() -> None:
     error = RuntimeError("process crashed")
     transport.emit_error(error)
 
-    assert client.turn_state is TurnState.FAILED
+    assert client.turn_state == TurnState.FAILED
     assert errors == [error]

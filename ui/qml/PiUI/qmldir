@@ -1,0 +1,6 @@
+module PiUI
+singleton Theme 1.0 Theme.qml
+RaisedSurface 1.0 RaisedSurface.qml
+InsetSurface 1.0 InsetSurface.qml
+NeuButton 1.0 NeuButton.qml
+Main 1.0 Main.qml
