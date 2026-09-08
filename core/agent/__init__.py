@@ -16,6 +16,13 @@ from .model_config import (
     PiModelsConfigManager,
     UnmanagedModelsConfigError,
 )
+from .model_discovery import (
+    DiscoveredModelProfile,
+    ExistingAuthKind,
+    ExistingModelsConfig,
+    ModelConfigManagementState,
+    PiModelsConfigDiscovery,
+)
 from .protocol import JsonlDecoder, JsonlProtocolError, encode_command
 from .runtime import (
     PiLaunchSpec,
@@ -30,15 +37,20 @@ __all__ = [
     "AgentClient",
     "AgentClientError",
     "AgentTransport",
+    "DiscoveredModelProfile",
+    "ExistingAuthKind",
+    "ExistingModelsConfig",
     "JsonlDecoder",
     "JsonlProtocolError",
     "LOCAL_AUTH_PLACEHOLDER",
     "MANAGED_MARKER_FILENAME",
     "MissingRuntimeCredentialError",
     "ModelConfigError",
+    "ModelConfigManagementState",
     "ModelsConfigChangedExternallyError",
     "ModelsConfigWriteResult",
     "PiLaunchSpec",
+    "PiModelsConfigDiscovery",
     "PiModelsConfigManager",
     "PiRuntimeBootstrap",
     "PiRuntimeBootstrapError",
