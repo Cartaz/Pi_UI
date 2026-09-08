@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
 from PySide6.QtCore import QObject, QTimer
 
 from core.agent.deadlines import DeadlineCallback, DeadlineHandle
