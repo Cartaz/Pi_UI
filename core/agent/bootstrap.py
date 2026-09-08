@@ -78,7 +78,6 @@ class PiRuntimeBootstrap:
         *,
         workspace: Path,
         base_environment: Mapping[str, str] | None = None,
-        user_name: str | None = None,
     ) -> PreparedPiRuntime:
         environment = dict(os.environ if base_environment is None else base_environment)
         self._validate_credential(settings, environment)
@@ -91,7 +90,6 @@ class PiRuntimeBootstrap:
             working_directory=workspace,
             paths=paths,
             base_environment=environment,
-            user_name=user_name,
         )
         return PreparedPiRuntime(
             paths=paths,
@@ -108,7 +106,6 @@ class PiRuntimeBootstrap:
         profile: DiscoveredModelProfile,
         expected_sha256: str,
         base_environment: Mapping[str, str] | None = None,
-        user_name: str | None = None,
     ) -> PreparedPiRuntime:
         """Launch against an already-working models.json without modifying it."""
 
@@ -138,7 +135,6 @@ class PiRuntimeBootstrap:
             working_directory=workspace,
             paths=paths,
             base_environment=environment,
-            user_name=user_name,
         )
         return PreparedPiRuntime(
             paths=paths,
