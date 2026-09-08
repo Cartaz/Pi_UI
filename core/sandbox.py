@@ -7,6 +7,8 @@ from pathlib import Path, PurePosixPath
 
 from core.settings import AgentSettings
 
+SANDBOX_HOME = PurePosixPath("/home/aios")
+
 _UNSAFE_RUNTIME_ROOTS = frozenset(
     {
         PurePosixPath("/"),
@@ -35,7 +37,6 @@ def build_bubblewrap_arguments(
     *,
     host_workspace: Path,
     sandbox_workspace: PurePosixPath,
-    sandbox_home: PurePosixPath,
     command: Sequence[str],
 ) -> tuple[str, ...]:
     """Build the canonical Pi_UI Bubblewrap argv without invoking a shell.
@@ -43,7 +44,8 @@ def build_bubblewrap_arguments(
     The sandbox starts from an empty mount namespace. The AIOS workspace is the
     only personal read/write tree; ``/usr`` and the managed Pi runtime are
     read-only. Network remains shared intentionally so Pi can reach LAN
-    inference and the internet when required by tools.
+    inference and the internet when required by tools. The synthetic HOME is
+    owned by this policy and is always ``/home/aios``.
     """
 
     if not settings.sandbox_enabled:
@@ -105,7 +107,7 @@ def build_bubblewrap_arguments(
         "--tmpfs",
         "/home",
         "--dir",
-        str(sandbox_home),
+        str(SANDBOX_HOME),
         "--dir",
         "/etc",
         "--ro-bind-try",
