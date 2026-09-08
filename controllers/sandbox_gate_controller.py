@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
 from controllers.agent_controller import AgentController, ConnectionState
 from core.preflight import CommandProbe, CommandProbeResult, HostRuntimeFacts, PreflightCheck, PreflightStatus
+from core.sandbox import command_is_visible_in_sandbox
 from core.sandbox_gate import SandboxGatePlan, SandboxGateService
 from core.settings import default_state_dir
 
@@ -94,14 +96,33 @@ class SandboxGateController:
     @property
     def can_run(self) -> bool:
         settings = self._agent_controller.settings.agent
+        workspace = self._agent_controller.workspace
+        node_executable = self._facts.node_executable
+        bwrap = Path(settings.bubblewrap_executable)
+        runtime_root = Path(settings.runtime_root)
+        node_ok = False
+        if node_executable is not None:
+            node_path = Path(node_executable)
+            node_ok = (
+                node_path.is_file()
+                and os.access(node_path, os.X_OK)
+                and command_is_visible_in_sandbox(
+                    node_executable,
+                    runtime_root=settings.runtime_root,
+                )
+            )
         return (
             not self._running
-            and self._agent_controller.workspace is not None
+            and workspace is not None
+            and workspace.is_dir()
             and self._agent_controller.connection_state
             in {ConnectionState.DISCONNECTED, ConnectionState.FAILED}
             and settings.sandbox_enabled
             and self._facts.os_name == "Linux"
-            and self._facts.node_executable is not None
+            and runtime_root.is_dir()
+            and bwrap.is_file()
+            and os.access(bwrap, os.X_OK)
+            and node_ok
         )
 
     def set_state_handler(self, handler: StateHandler) -> None:
@@ -116,7 +137,7 @@ class SandboxGateController:
     def run(self) -> None:
         if not self.can_run:
             raise SandboxGateControllerError(
-                "sandbox gate requires Linux, a workspace, visible Node and disconnected Pi"
+                "sandbox gate requires Linux, a workspace, Bubblewrap, runtime root, visible Node and disconnected Pi"
             )
         workspace = self._agent_controller.workspace
         node_executable = self._facts.node_executable
