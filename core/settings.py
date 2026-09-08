@@ -8,7 +8,7 @@ import re
 import tempfile
 import time
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Final
 from urllib.parse import urlsplit
 
@@ -38,10 +38,13 @@ class AgentSettings:
     """Pi runtime configuration owned by Pi_UI.
 
     Secrets are deliberately not stored here. ``api_key_env`` names an
-    environment variable that can be injected into Pi when the runtime starts.
+    environment variable copied into the sanitized Pi process environment.
     """
 
-    executable: str = "pi"
+    executable: str = "/opt/pi-agent/bin/pi"
+    runtime_root: str = "/opt/pi-agent"
+    sandbox_enabled: bool = True
+    bubblewrap_executable: str = "/usr/bin/bwrap"
     provider: str | None = None
     model: str | None = None
     base_url: str | None = None
@@ -52,6 +55,8 @@ class AgentSettings:
     thinking_level: str | None = None
     skip_version_check: bool = True
     offline_startup: bool = False
+    startup_timeout_ms: int = 10_000
+    shutdown_timeout_ms: int = 5_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,13 +209,10 @@ def _parse_agent_settings(raw: dict[str, Any]) -> AgentSettings:
     values = asdict(defaults)
     values.update(raw)
 
-    _require_non_empty_string(values, "executable")
-    _optional_non_empty_string(values, "provider")
-    _optional_non_empty_string(values, "model")
-    _optional_non_empty_string(values, "base_url")
-    _require_non_empty_string(values, "api")
-    _optional_non_empty_string(values, "api_key_env")
-    _optional_non_empty_string(values, "thinking_level")
+    for key in ("executable", "runtime_root", "bubblewrap_executable", "api"):
+        _require_non_empty_string(values, key)
+    for key in ("provider", "model", "base_url", "api_key_env", "thinking_level"):
+        _optional_non_empty_string(values, key)
 
     if values["base_url"] is not None:
         _validate_base_url(values["base_url"])
@@ -226,9 +228,33 @@ def _parse_agent_settings(raw: dict[str, Any]) -> AgentSettings:
         ):
             raise SettingsValidationError(f"{key} must be a positive integer or null")
 
-    for key in ("skip_version_check", "offline_startup"):
+    for key in ("startup_timeout_ms", "shutdown_timeout_ms"):
+        value = values[key]
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise SettingsValidationError(f"{key} must be a positive integer")
+
+    for key in ("sandbox_enabled", "skip_version_check", "offline_startup"):
         if not isinstance(values[key], bool):
             raise SettingsValidationError(f"{key} must be a boolean")
+
+    if values["sandbox_enabled"]:
+        executable = PurePosixPath(values["executable"])
+        runtime_root = PurePosixPath(values["runtime_root"])
+        bubblewrap = PurePosixPath(values["bubblewrap_executable"])
+        if not executable.is_absolute() or not runtime_root.is_absolute():
+            raise SettingsValidationError(
+                "sandboxed executable and runtime_root must be absolute paths"
+            )
+        if not bubblewrap.is_absolute():
+            raise SettingsValidationError(
+                "bubblewrap_executable must be an absolute path when sandboxing"
+            )
+        try:
+            executable.relative_to(runtime_root)
+        except ValueError as exc:
+            raise SettingsValidationError(
+                "sandboxed executable must be inside runtime_root"
+            ) from exc
 
     return AgentSettings(**values)
 
