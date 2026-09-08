@@ -11,6 +11,8 @@ ApplicationWindow {
     required property var agentAdapter
     required property var messageModel
     required property var profileModel
+    required property var preflightAdapter
+    required property var preflightModel
 
     width: 1180
     height: 760
@@ -32,6 +34,197 @@ ApplicationWindow {
         id: workspaceDialog
         title: "Choose AIOS workspace"
         onAccepted: window.agentAdapter.setWorkspaceUrl(selectedFolder)
+    }
+
+    Popup {
+        id: preflightDialog
+        parent: Overlay.overlay
+        x: Math.round((window.width - width) / 2)
+        y: Math.round((window.height - height) / 2)
+        width: Math.min(760, window.width - 72)
+        height: Math.min(620, window.height - 72)
+        modal: true
+        focus: true
+        padding: 22
+        closePolicy: Popup.CloseOnEscape
+
+        onOpened: {
+            if (!window.preflightAdapter.running)
+                window.preflightAdapter.runPreflight()
+        }
+
+        background: Rectangle {
+            radius: Theme.radiusMain
+            color: Theme.surface
+            border.width: 1
+            border.color: Qt.rgba(1, 1, 1, 0.08)
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 14
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 12
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 3
+
+                    Text {
+                        text: "M0 preflight"
+                        color: Theme.textPrimary
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 20
+                        font.weight: Font.DemiBold
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: window.preflightAdapter.operationError.length > 0
+                            ? window.preflightAdapter.operationError
+                            : window.preflightAdapter.statusText
+                        color: window.preflightAdapter.failCount > 0
+                            ? Theme.errorText
+                            : Theme.textSecondary
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 12
+                        wrapMode: Text.Wrap
+                    }
+                }
+
+                NeuButton {
+                    text: window.preflightAdapter.running ? "Cancel" : "Run again"
+                    onClicked: {
+                        if (window.preflightAdapter.running)
+                            window.preflightAdapter.cancelPreflight()
+                        else
+                            window.preflightAdapter.runPreflight()
+                    }
+                }
+
+                NeuButton {
+                    text: "Close"
+                    onClicked: preflightDialog.close()
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 16
+
+                Text {
+                    text: "Blocking " + window.preflightAdapter.failCount
+                    color: window.preflightAdapter.failCount > 0 ? Theme.errorText : Theme.textSecondary
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11
+                }
+                Text {
+                    text: "Warnings " + window.preflightAdapter.warningCount
+                    color: Theme.textSecondary
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11
+                }
+                Text {
+                    text: "Pending target gate " + window.preflightAdapter.pendingCount
+                    color: Theme.textMuted
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11
+                }
+                Item { Layout.fillWidth: true }
+            }
+
+            ListView {
+                id: preflightList
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                reuseItems: true
+                spacing: 8
+                model: window.preflightModel
+                boundsBehavior: Flickable.StopAtBounds
+                ScrollBar.vertical: ScrollBar { }
+
+                delegate: Rectangle {
+                    id: preflightDelegate
+                    required property string label
+                    required property string checkStatus
+                    required property string summary
+                    required property string detail
+
+                    width: ListView.view.width
+                    height: checkColumn.implicitHeight + 20
+                    radius: Theme.radiusSmall
+                    color: Theme.surface
+                    border.width: 1
+                    border.color: preflightDelegate.checkStatus === "fail"
+                        ? Qt.rgba(220 / 255, 132 / 255, 96 / 255, 0.35)
+                        : (preflightDelegate.checkStatus === "pass"
+                            ? Qt.rgba(1, 1, 1, 0.055)
+                            : Qt.rgba(1, 102 / 255, 0, 0.18))
+
+                    Column {
+                        id: checkColumn
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: 10
+                        spacing: 3
+
+                        Row {
+                            spacing: 8
+                            Text {
+                                text: preflightDelegate.checkStatus.toUpperCase()
+                                color: preflightDelegate.checkStatus === "fail"
+                                    ? Theme.errorText
+                                    : (preflightDelegate.checkStatus === "pass"
+                                        ? Theme.textSecondary
+                                        : Theme.accent)
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 10
+                                font.weight: Font.DemiBold
+                            }
+                            Text {
+                                text: preflightDelegate.label
+                                color: Theme.textPrimary
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 13
+                                font.weight: Font.DemiBold
+                            }
+                        }
+
+                        Text {
+                            width: parent.width
+                            text: preflightDelegate.summary
+                            color: Theme.textSecondary
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 12
+                            wrapMode: Text.Wrap
+                        }
+
+                        Text {
+                            width: parent.width
+                            visible: preflightDelegate.detail.length > 0
+                            text: preflightDelegate.detail
+                            color: Theme.textMuted
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 10
+                            wrapMode: Text.WrapAnywhere
+                        }
+                    }
+                }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                visible: window.preflightAdapter.sanitizedManifest.length > 0
+                text: "A sanitized shareable manifest is ready in the application state; the target confinement tests are still intentionally pending."
+                color: Theme.textMuted
+                font.family: Theme.fontFamily
+                font.pixelSize: 10
+                wrapMode: Text.Wrap
+            }
+        }
     }
 
     Connections {
@@ -88,7 +281,7 @@ ApplicationWindow {
                 Item { Layout.fillWidth: true }
 
                 ColumnLayout {
-                    Layout.preferredWidth: 290
+                    Layout.preferredWidth: 250
                     spacing: 4
 
                     Text {
@@ -196,6 +389,12 @@ ApplicationWindow {
                     text: "Workspace"
                     enabled: !window.agentAdapter.canDisconnect
                     onClicked: workspaceDialog.open()
+                }
+
+                NeuButton {
+                    text: "Preflight"
+                    enabled: !window.agentAdapter.canDisconnect
+                    onClicked: preflightDialog.open()
                 }
 
                 NeuButton {
