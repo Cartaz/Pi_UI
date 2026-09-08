@@ -63,10 +63,13 @@ def main() -> int:
     engine = QQmlApplicationEngine()
     qml_root = Path(__file__).resolve().parent / "ui" / "qml"
     engine.addImportPath(str(qml_root))
-    context = engine.rootContext()
-    context.setContextProperty("agentAdapter", agent_adapter)
-    context.setContextProperty("messageModel", message_model)
-    context.setContextProperty("profileModel", profile_model)
+    engine.setInitialProperties(
+        {
+            "agentAdapter": agent_adapter,
+            "messageModel": message_model,
+            "profileModel": profile_model,
+        }
+    )
     engine.loadFromModule("PiUI", "Main")
 
     if not engine.rootObjects():
