@@ -88,6 +88,7 @@ def test_linux_plan_discovers_host_probes_without_mutating_workspace(tmp_path: P
     assert checks["host-os"].status == PreflightStatus.PASS
     assert checks["workspace"].status == PreflightStatus.PASS
     assert checks["sandbox-enabled"].status == PreflightStatus.PASS
+    assert checks["runtime-root"].status == PreflightStatus.PASS
     assert checks["models-config"].status == PreflightStatus.PASS
     assert checks["network-policy"].status == PreflightStatus.WARN
     assert checks["confinement-runtime"].status == PreflightStatus.PENDING
@@ -121,6 +122,32 @@ def test_host_node_outside_mounted_trees_is_blocking_for_sandbox(tmp_path: Path)
     assert checks["node"].status == PreflightStatus.FAIL
     assert "not mounted into the sandbox" in checks["node"].summary
     assert "node" not in {probe.probe_id for probe in plan.probes}
+
+
+def test_runtime_overlapping_workspace_is_blocking_in_host_preflight(tmp_path: Path) -> None:
+    workspace = tmp_path / "AIOS"
+    workspace.mkdir()
+    runtime_root = workspace / ".runtime"
+    pi = _make_executable(runtime_root / "bin" / "pi")
+    node = _make_executable(runtime_root / "bin" / "node")
+    bwrap = _make_executable(tmp_path / "bin" / "bwrap")
+    settings = AgentSettings(
+        executable=str(pi),
+        runtime_root=str(runtime_root),
+        bubblewrap_executable=str(bwrap),
+    )
+
+    plan = PreflightPlanner().build(
+        settings,
+        workspace=workspace,
+        existing_models=None,
+        facts=_facts(node),
+    )
+    checks = {item.check_id: item for item in plan.checks}
+
+    assert checks["runtime-root"].status == PreflightStatus.FAIL
+    assert checks["runtime-root"].summary == "Runtime root violates sandbox policy"
+    assert "must not overlap" in checks["runtime-root"].detail
 
 
 def test_missing_workspace_and_disabled_sandbox_are_blocking(tmp_path: Path) -> None:
