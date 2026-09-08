@@ -12,12 +12,7 @@ from PySide6.QtWidgets import QApplication
 from core.preflight import CommandProbe, CommandProbeResult
 from ui.native.probe_runner import QtProbeRunner
 
-
-def _application() -> QApplication:
-    instance = QApplication.instance()
-    if instance is not None:
-        return instance
-    return QApplication([])
+_APP = QApplication.instance() or QApplication([])
 
 
 def _environment(tmp_path: Path) -> tuple[tuple[str, str], ...]:
@@ -29,7 +24,7 @@ def _environment(tmp_path: Path) -> tuple[tuple[str, str], ...]:
 
 
 def test_probe_runner_reports_stdout_and_runs_sequentially(tmp_path: Path) -> None:
-    app = _application()
+    app = _APP
     runner = QtProbeRunner()
     loop = QEventLoop()
     results: list[CommandProbeResult] = []
@@ -81,7 +76,7 @@ def test_probe_runner_reports_stdout_and_runs_sequentially(tmp_path: Path) -> No
 
 
 def test_probe_runner_marks_timeout_without_blocking_event_loop(tmp_path: Path) -> None:
-    app = _application()
+    app = _APP
     runner = QtProbeRunner()
     loop = QEventLoop()
     results: list[CommandProbeResult] = []
@@ -124,7 +119,7 @@ def test_probe_runner_marks_timeout_without_blocking_event_loop(tmp_path: Path) 
 def test_probe_runner_cancel_suppresses_late_result_and_finished_callbacks(
     tmp_path: Path,
 ) -> None:
-    app = _application()
+    app = _APP
     runner = QtProbeRunner()
     loop = QEventLoop()
     results: list[CommandProbeResult] = []
