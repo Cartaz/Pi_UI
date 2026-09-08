@@ -6,7 +6,9 @@ Il prodotto ruota intorno a **un unico spazio di lavoro persistente**, con più 
 
 ## Stato reale
 
-Repository inizializzata con documentazione di progetto. **L'applicazione non è ancora implementata**: non sono presenti launcher, installer, collegamento LAN o test applicativi. Le milestone M0–M5 sono da realizzare; le checklist nella roadmap indicano lavoro futuro.
+M0 è **in corso**. La repository contiene ora la prima fondazione Python verificabile: settings tipizzati/atomici, framing JSONL per Pi RPC, contratto di trasporto indipendente da Qt, launch spec con configurazione/sessioni Pi isolate e test core con CI ospitata.
+
+**La GUI non è ancora implementata** e non sono ancora presenti QProcess, shell QML, collegamento LAN operativo o prova reale con Ornith. Nessuna parte di M0 che richiede la baseline locale viene dichiarata completata senza quella verifica. Vedi [stato M0](docs/M0_PROGRESS.md).
 
 ## Obiettivo
 
@@ -19,6 +21,7 @@ Le conoscenze vivono in file locali leggibili anche senza Pi_UI. La memoria non 
 | Documento | Contenuto |
 |---|---|
 | [ROADMAP.md](ROADMAP.md) | Milestone, attività, dipendenze, criteri di accettazione, rischi e prima sequenza di lavoro |
+| [Stato M0](docs/M0_PROGRESS.md) | Evidenze del lavoro corrente, verifiche eseguite e parti ancora aperte |
 | [Architettura](docs/ARCHITECTURE.md) | Confini dei moduli, proprietà dello stato, integrazione Pi, persistenza e UI |
 | [Decisioni iniziali](docs/DECISIONS.md) | Scelte, alternative e questioni da verificare |
 | [Validazione](docs/VALIDATION.md) | Scenari funzionali, test, misure e prove locali con Ornith |
@@ -27,10 +30,11 @@ Le conoscenze vivono in file locali leggibili anche senza Pi_UI. La memoria non 
 
 ## Scelte di base
 
-- Python 3.12+, PySide6/Qt 6.11+, QApplication e QQmlApplicationEngine; versioni esatte da fissare e verificare in M0.
+- Python 3.12+, PySide6/Qt 6.11+, QApplication e QQmlApplicationEngine; le versioni Qt esatte restano da fissare e verificare in M0.
 - QML nativo, dark neumorphism: superficie `#141414`, accento `#FF6600`, **Noto Sans**, raggi 28/22/16/12 px.
 - Pi eseguito localmente in background tramite RPC; inferenza Ornith 1.5 sul server LAN configurato dall'utente.
 - Una sola sessione agente attiva nella prima versione; molte conversazioni sullo stesso archivio.
+- Configurazione/sessioni Pi usate da Pi_UI isolate dall'installazione globale; aggiornamenti Pi espliciti e gestiti dall'app, non automatici all'avvio.
 - Test con modello reale esclusivamente nella LAN dell'utente; nessun runner GitHub self-hosted.
 - Documenti personali, credenziali e sessioni rimangono fuori dalla repository del software.
 
@@ -38,10 +42,10 @@ Ornith + Pi è una scelta già validata dall'utente nei propri test AIOS-bench; 
 
 ## Prossimo traguardo
 
-**M0: riprodurre il collegamento Pi–Ornith nella nuova integrazione**, mantenendo la configurazione che funziona già e documentando versioni, protocollo, streaming, stop, salvataggio e chiusura dei processi. Segue M1, che rende realmente utilizzabili chat e file insieme.
+Completare la parte centrale di **M0**: fissare la baseline locale effettiva, generare la configurazione Pi derivata per il server LAN, implementare QProcess asincrono con correlazione richieste/stato turno/stop/shutdown e poi collegare una shell QML minima. Solo dopo le prove reali Pi–Ornith si passa alla GUI M1 estesa per chat e file.
 
 ## Contribuire
 
-Leggere [AGENTS.md](AGENTS.md), scegliere un'attività della [roadmap](ROADMAP.md) e aggiornarne lo stato solo con evidenze verificabili. I percorsi di codice descritti nell'architettura sono proposti: crearli quando viene implementata la relativa responsabilità.
+Leggere [AGENTS.md](AGENTS.md), scegliere un'attività della [roadmap](ROADMAP.md) e aggiornare lo stato solo con evidenze verificabili. I percorsi di codice descritti nell'architettura vengono creati quando nasce la relativa responsabilità; non si aggiunge scaffold vuoto.
 
-La licenza del progetto è da scegliere dal proprietario prima della distribuzione. Nessun codice dei progetti di riferimento è copiato in questa inizializzazione.
+La licenza del progetto è da scegliere dal proprietario prima della distribuzione. Nessun codice dei progetti di riferimento è copiato nella repository.
