@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Final
 
 from core.agent.model_discovery import ExistingModelsConfig, ModelConfigManagementState
+from core.sandbox import command_is_visible_in_sandbox
 from core.settings import AgentSettings
 
 _MAX_PROBE_TEXT: Final = 1000
@@ -165,22 +166,44 @@ class PreflightPlanner:
         if facts.node_executable:
             node_path = Path(facts.node_executable)
             node_ok = node_path.is_file() and os.access(node_path, os.X_OK)
-            checks.append(
-                PreflightCheck(
-                    "node",
-                    "Node.js runtime",
-                    PreflightStatus.PENDING if node_ok else PreflightStatus.FAIL,
-                    "Version probe pending" if node_ok else "Node executable is unavailable",
+            sandbox_visible = (
+                not settings.sandbox_enabled
+                or command_is_visible_in_sandbox(
                     str(node_path),
+                    runtime_root=settings.runtime_root,
                 )
             )
-            if node_ok:
+            if node_ok and sandbox_visible:
+                checks.append(
+                    PreflightCheck(
+                        "node",
+                        "Node.js runtime",
+                        PreflightStatus.PENDING,
+                        "Version probe pending",
+                        str(node_path),
+                    )
+                )
                 probes.append(
                     CommandProbe(
                         probe_id="node",
                         label="Node.js runtime",
                         executable=str(node_path),
                         arguments=("--version",),
+                    )
+                )
+            else:
+                summary = (
+                    "Node executable is unavailable"
+                    if not node_ok
+                    else "Node exists on the host but is not mounted into the sandbox"
+                )
+                checks.append(
+                    PreflightCheck(
+                        "node",
+                        "Node.js runtime",
+                        PreflightStatus.FAIL,
+                        summary,
+                        str(node_path),
                     )
                 )
         else:
