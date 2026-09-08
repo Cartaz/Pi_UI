@@ -64,10 +64,13 @@ class QtProbeRunner(QObject):
         process = self._process
         self._process = None
         self._probe = None
-        if process is not None:
-            if process.state() != QProcess.ProcessState.NotRunning:
-                process.kill()
+        if process is None:
+            return
+        if process.state() == QProcess.ProcessState.NotRunning:
             process.deleteLater()
+            return
+        process.finished.connect(process.deleteLater)
+        process.kill()
 
     def _start_next(self) -> None:
         if self._cancelled:
