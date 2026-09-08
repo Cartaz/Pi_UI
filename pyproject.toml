@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pi-ui"
+version = "0.1.0.dev0"
+description = "Desktop AI OS shell around Pi Agent with LAN inference"
+requires-python = ">=3.12"
+
+[project.optional-dependencies]
+test = ["pytest>=8.3,<10"]
+
+[tool.setuptools.packages.find]
+include = ["core*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
