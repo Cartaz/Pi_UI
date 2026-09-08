@@ -4,49 +4,73 @@ Aggiornamento: 8 settembre 2026.
 
 Questo documento registra evidenze incrementali della milestone M0 senza dichiarare completati i gate che richiedono la configurazione Pi/Ornith reale sulla LAN e la macchina CachyOS target.
 
-## Tranche 1 — Fondazione core
+## Implementato e verificato in CI
 
-Implementato nel ramo `m0/core-foundation`:
+### Fondazione core e configurazione
 
-- `core/settings.py`: settings tipizzati, percorsi XDG, validazione, scrittura atomica con `fsync`/`os.replace`, preservazione e recupero da file JSON malformato o non compatibile; endpoint e riferimenti a credenziali restano locali.
-- `core/agent/protocol.py`: framing RPC JSONL incrementale, delimitatore LF stretto, CRLF tollerato, UTF-8 spezzato tra chunk, più record per lettura, EOF parziale, record non validi e limite massimo per record.
-- `core/agent/transport.py`: contratto `AgentTransport` indipendente da Qt con stato processo esplicito e canale diagnostico distinto dal protocollo.
-- `pyproject.toml` e CI GitHub ospitata per compileall/test su Python 3.12/3.13.
+- `core/settings.py`: settings tipizzati, percorsi XDG per le preferenze globali, validazione, migrazioni di schema, scrittura atomica con `fsync`/`os.replace`, preservazione e recupero da file JSON malformato o non compatibile.
+- Settings schema 4: timeout distinti per startup processo, acknowledgement RPC, inattività del turno e shutdown.
+- Configurazione provider/modello Pi derivabile dallo stato canonico Pi_UI, con credenziali soltanto tramite riferimenti a variabili d'ambiente.
+- Discovery read-only di un `AIOS_ROOT/.pi-agent/models.json` esistente, senza restituire credenziali letterali e senza adottarlo o sovrascriverlo implicitamente.
+- Fingerprint SHA-256 della baseline esistente e verifica immediatamente prima del launch; una modifica nel frattempo blocca l'avvio.
+- Un `models.json` presente ma corrotto/non interpretabile non fa fallire l'avvio della GUI: produce zero profili utilizzabili e impedisce il connect.
 
-## Tranche 2 — Runtime Bubblewrap, stato RPC e QProcess
+### Bubblewrap launch specification
 
-Implementato nello stesso ramo:
+- AIOS root host montata come `/workspace`, unico albero personale read-write previsto.
+- Runtime `/opt/pi-agent` e `/usr` read-only; home/tmp sintetici, configurazione/sessioni Pi in `/workspace/.pi-agent`.
+- Rete host condivisa per mantenere la connettività LAN; questa scelta **non** limita le destinazioni di rete.
+- Ambiente child allow-list: HOME/PATH/locale, variabili Pi e soltanto l'eventuale variabile credenziale nominata nei settings. `DISPLAY`, `SSH_AUTH_SOCK` e ambiente desktop non vengono copiati implicitamente.
+- Alias FHS `/bin`, `/sbin`, `/lib`, `/lib64` ricreati verso `/usr` quando necessari.
+- Nessun fallback automatico sandbox → host.
 
-- Settings schema 2 con migrazione esplicita dalla prima configurazione M0; il vecchio default `executable: "pi"` viene migrato al runtime gestito `/opt/pi-agent/bin/pi` senza trattare il file come corrotto.
-- Runtime Bubblewrap derivato dalla configurazione già usata dall'utente: AIOS root host montata come `/workspace`, runtime `/opt/pi-agent` e `/usr` read-only, home/tmp temporanei, config/sessioni in `/workspace/.pi-agent`, rete host condivisa per LAN/Internet, nessun fallback sandbox → host automatico.
-- Ambiente child allow-list: `HOME`, `PATH`, locale, variabili Pi e soltanto l'eventuale variabile credenziale nominata nei settings. `DISPLAY`, `SSH_AUTH_SOCK` e ambiente desktop non vengono copiati implicitamente. Le credenziali non vengono inserite negli argomenti Bubblewrap/Pi.
-- Alias FHS `/bin`, `/sbin`, `/lib`, `/lib64` ricreati come symlink verso `/usr`, necessari quando il root Bubblewrap espone soltanto `/usr` come albero di sistema.
-- `core/agent/client.py`: ID richiesta, correlazione risposta, prompt/steer/follow-up, stato turno e stop ordinato `clear_queue → abort`. Una risposta positiva a `prompt` non chiude il turno; `agent_settled` è il segnale di ritorno all'idle.
-- `ui/native/agent_process.py`: trasporto PySide6 `QProcess` completamente asincrono, stdout JSONL e stderr diagnostico separati, startup/shutdown timer, `terminate()` con escalation a `kill()`, nessun `waitFor*` nel thread GUI.
-- Test del trasporto Qt con un vero subprocess RPC sintetico: stdin/stdout/stderr, correlazione di base e lifecycle vengono attraversati dall'event loop Qt, non simulati sostituendo `QProcess`.
+Questa parte è verificata come costruzione deterministica dell'argv/ambiente. L'efficacia reale del namespace Bubblewrap resta da provare sulla macchina target.
 
-### Verifiche osservate
+### RPC, stato e process lifecycle
 
-- CI GitHub ospitata su Python 3.12: compileall e test passati per i cicli completi precedenti all'ultimo affinamento del profilo Bubblewrap.
-- CI GitHub ospitata su Python 3.13: compileall e test passati per gli stessi cicli.
-- Il test QProcess reale sintetico è incluso in tali cicli verdi.
-- L'ultimo affinamento aggiunge soltanto gli alias FHS del sandbox e il relativo test; il gate finale va registrato sul commit head prima del merge.
+- `core/agent/protocol.py`: JSONL incrementale con LF stretto, CRLF tollerato, UTF-8 spezzato, più record per chunk, EOF parziale, record non validi e limiti dimensionali.
+- `AgentClient`: request ID, correlazione, prompt/steer/follow-up, `get_messages`, stato turno e stop `clear_queue → abort`.
+- L'ACK positivo del prompt è distinto dal completamento; `agent_settled` riporta il turno a idle.
+- Deadline RPC per richiesta: se manca l'ACK, Pi_UI **non reinvia** il comando. Per un prompt l'esito diventa `uncertain` e nuovi invii restano bloccati fino alla riconciliazione della sessione.
+- Watchdog di inattività separato: segnala un turno silenzioso senza uccidere Pi, senza retry e lasciando Stop disponibile.
+- `QProcessAgentTransport`: stdout RPC e stderr diagnostico separati, startup/shutdown asincroni, `terminate()` con escalation temporizzata a `kill()`, nessun `waitFor*` nel GUI thread.
+- `AppShutdownCoordinator`: la chiusura dell'ultima finestra mantiene vivo l'event loop Qt mentre QProcess completa lo shutdown; un watchdog applicativo finale evita un hang infinito.
 
-Queste prove verificano codice Python/PySide6 e protocollo sintetico. **Non provano ancora** che `/opt/pi-agent`, Bubblewrap, Pi, Node, llama.cpp e Ornith funzionino insieme sul computer dell'utente, né che il profilo resista a tutti i tentativi di accesso fuori workspace.
+### Prima shell Qt Quick
 
-## Contratto Pi verificato upstream
+- Entry point `pi-ui` con `QApplication` + `QQmlApplicationEngine` e wiring soltanto in `main.py`.
+- Controller Python presentation-independent.
+- `AgentAdapter` focalizzato e due `QAbstractListModel` per profili e transcript.
+- QML dark-neumorphic con Theme, RaisedSurface, InsetSurface e NeuButton centralizzati.
+- Workspace/profile selection, connect/disconnect, cronologia via RPC, transcript virtualizzato, composer, send e stop collegati a operazioni reali.
+- Dipendenze backend QML dichiarate come proprietà `required` e inizializzate con `setInitialProperties()`.
 
-La documentazione ufficiale corrente di Pi conferma i punti su cui si basa questa integrazione:
+## Evidenze CI osservate
 
-- RPC per integrazioni non-Node tramite `pi --mode rpc` su stdin/stdout JSONL.
-- Framing con LF come unico delimitatore di record; gli ID opzionali correlano comando e risposta.
-- La risposta positiva a `prompt` indica accettazione/coda/gestione del comando, non il completamento del turno; gli eventi continuano in modo asincrono.
-- `agent_end` può essere seguito da retry, compattazione o continuazioni; `agent_settled` indica che non resta alcuna continuazione automatica.
-- Per uno stop interattivo, Pi documenta `clear_queue` prima di `abort`, così i messaggi accodati possono essere recuperati dal client.
-- `--session-dir` e `PI_CODING_AGENT_SESSION_DIR` permettono di separare le sessioni.
-- `PI_CODING_AGENT_DIR` permette di isolare la configurazione Pi usata dall'app.
-- `PI_SKIP_VERSION_CHECK` disabilita il check versione all'avvio; `PI_OFFLINE` disabilita le operazioni di rete di startup documentate.
-- Pi supporta estensioni, skill, prompt template, temi e package; queste primitive saranno esposte dalla GUI invece di mantenere un fork di Pi.
+Il gate ospitato GitHub attuale esegue, su Python 3.12 e 3.13:
+
+1. installazione PySide6 6.11.x e dipendenze test;
+2. `python -m compileall -q controllers core ui tests main.py`;
+3. `pyside6-qmllint --max-warnings 0 -I ui/qml ui/qml/PiUI/*.qml`;
+4. `python -m pytest` con `QT_QPA_PLATFORM=offscreen`.
+
+Sul head della PR M0 timeout/lifecycle questi quattro step sono stati osservati verdi su entrambe le versioni Python. La suite include un vero subprocess RPC sintetico, caricamento QML offscreen, scheduler Qt, timeout RPC/inattività, configurazione corrotta e un subprocess che installa un handler SIGTERM, segnala readiness, ignora `terminate()` e viene poi chiuso tramite l'escalation temporizzata del transport.
+
+Queste sono prove su runner ospitato e dati sintetici. **Non sono** prove della configurazione privata dell'utente o del confinement Bubblewrap reale.
+
+## Contratti upstream usati
+
+### Pi
+
+La documentazione ufficiale corrente di Pi conferma:
+
+- `pi --mode rpc` via stdin/stdout JSONL;
+- LF come delimitatore e ID opzionali per correlazione;
+- ACK prompt distinto dal completamento;
+- `agent_settled` dopo retry/compattazione/continuazioni automatiche;
+- `clear_queue` prima di `abort` per uno stop interattivo con recupero della coda;
+- `--session-dir`, `PI_CODING_AGENT_SESSION_DIR` e `PI_CODING_AGENT_DIR` per isolamento;
+- estensioni, skill, prompt template e package come primitive upstream da esporre senza forkare Pi.
 
 Riferimenti primari:
 
@@ -56,40 +80,42 @@ Riferimenti primari:
 - https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md
 - https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md
 
-Questi riferimenti puntano al ramo upstream corrente. M0 deve comunque fissare e testare una versione precisa prima di considerare stabile il contratto applicativo.
+Questi link seguono il ramo upstream corrente. M0 deve ancora fissare e provare la versione Pi esatta realmente usata dall'utente.
 
-## Contratto Bubblewrap verificato
+### Bubblewrap
 
-Bubblewrap costruisce un filesystem namespace inizialmente vuoto e rende visibili soltanto i mount dichiarati. Il profilo Pi_UI sfrutta quindi il mount namespace come enforcement del confine filesystem, non come semplice convenzione di path.
-
-Con un root che espone `/usr` senza il root host completo, i normali alias FHS devono essere ricostruiti. La documentazione `mkosi-sandbox` di Arch mostra esplicitamente `/bin → usr/bin`, `/lib → usr/lib`, `/lib64 → usr/lib64` e `/sbin → usr/sbin` nello stesso scenario; Pi_UI replica questa parte nel launch spec.
+Bubblewrap costruisce un mount namespace la cui esposizione dipende dagli argomenti dichiarati. Pi_UI usa questo meccanismo per progettare il confine filesystem, non la sola convenzione del workspace. La rete è un confine distinto: `--share-net` mantiene la LAN ma non applica egress filtering.
 
 Riferimenti:
 
+- https://github.com/containers/bubblewrap/blob/main/README.md
 - https://man.archlinux.org/man/bwrap.1.en
-- https://man.archlinux.org/man/mkosi-sandbox.1.en
 
 ## Politica aggiornamenti e personalizzazione Pi
 
-Pi_UI non incorporerà un fork di Pi come seconda base di codice. Il piano è trattare Pi come runtime gestito e personalizzabile:
-
-1. **Runtime isolato:** configurazione, sessioni e risorse usate da Pi_UI non sovrascrivono l'installazione Pi globale dell'utente.
-2. **Nessun auto-update implicito:** all'avvio normale Pi_UI disabilita il check versione upstream. Gli aggiornamenti saranno un'azione visibile della GUI e verranno introdotti solo dopo avere definito verifica compatibilità e rollback.
-3. **Impostazioni inferenza:** endpoint LAN, provider/API, model ID, contesto, output e thinking sono proprietà del servizio settings; la GUI modifica queste proprietà, non file Pi in parallelo.
-4. **Configurazione Pi derivata:** `models.json` e le altre configurazioni necessarie saranno generate dal runtime manager a partire dallo stato canonico dell'app, dopo aver verificato la baseline locale. Nessun valore Ornith viene inventato dal nome del modello.
-5. **Personalizzazioni dalla GUI:** una sezione dedicata mostrerà estensioni, skill, prompt e package disponibili/abilitati. Installazione, rimozione e aggiornamento saranno operazioni esplicite con origine/versione visibili e trust chiaro.
-6. **Compatibilità prima dell'aggiornamento:** una nuova versione Pi deve superare test RPC/core e una prova LAN controllata prima di diventare la versione attiva dell'app. La versione precedente deve restare ripristinabile quando il meccanismo di update verrà implementato.
-
-Il ramo corrente implementa isolamento del runtime, controllo degli update check, schema settings e trasporto RPC; non implementa ancora installazione/aggiornamento/rollback di Pi né la GUI di personalizzazione.
+1. **Runtime isolato:** configurazione/sessioni dell'app non devono modificare l'installazione Pi globale dell'utente.
+2. **Nessun auto-update implicito:** aggiornamenti Pi saranno un'azione GUI esplicita con compatibility gate e rollback.
+3. **Inferenza canonica nei settings:** endpoint, provider/API, model ID, contesto, output e thinking appartengono al servizio settings; `models.json` gestito è derivato da questo stato.
+4. **Baseline utente preservata:** un `models.json` preesistente può essere usato read-only dopo discovery/fingerprint; non viene adottato silenziosamente.
+5. **Personalizzazioni dalla GUI:** estensioni, skill, prompt e package verranno mostrate/gestite usando capacità upstream di Pi con origine/versione/trust visibili.
+6. **Subagents:** la roadmap registra un futuro sistema di gestione di prima classe, ma orchestrazione/parallelismo/memoria condivisa restano da progettare sui casi d'uso reali.
 
 ## Lavoro M0 ancora aperto
 
-- Inventario reale di versione Pi/package, Node, llama.cpp, model ID, quantizzazione, template, tool/reasoning, context window e parametri usati nella baseline.
-- Pin verificato di Pi/Node e conferma della build PySide6 effettivamente usata sulla macchina target.
-- Generazione validata della configurazione provider/modello Pi (`models.json`) per il server LAN.
-- Timeout di richiesta e inattività sopra il lifecycle del processo; startup/shutdown sono già temporizzati.
-- Prove Bubblewrap reali sul desktop target: lettura/scrittura fuori `/workspace`, symlink verso l'esterno, shell/subprocess, HOME reale, socket desktop, processi figli e shutdown.
-- Shell QML minimale con connessione, invio, streaming e stop reali; smoke QML e focus/tastiera di base.
-- Tre sessioni reali Pi–Ornith, stop, session resume, tool file di prova, errore server e verifica di assenza processi orfani richiesti dal gate M0.
+### Può essere preparato senza la macchina target
 
-M0 resta quindi **in corso**, non completata.
+- Preflight/diagnostica applicativa che raccolga in modo non mutante versioni/runtime/path e produca un manifest sanitizzato.
+- UI del preflight e report locale per rendere il test target un singolo workflow guidato.
+- Checklist automatizzata dei tentativi di accesso che Pi dovrà eseguire dentro Bubblewrap.
+- Verifica/aggiornamento della documentazione di installazione e troubleshooting sulla base del preflight.
+
+### Richiede la macchina/rete dell'utente
+
+- Inventario reale: Pi package/versione, Node, build llama.cpp, model ID, quantizzazione, template, tool/reasoning, context window e parametri della baseline.
+- Pin della versione Pi/Node effettivamente compatibile.
+- Conferma del provider/API/model ID/capabilities contro Ornith reale.
+- Prove Bubblewrap su CachyOS: accesso fuori `/workspace`, symlink verso l'esterno, HOME reale, socket desktop, process discovery, shell/tool figli e shutdown/orfani.
+- Tre sessioni Pi–Ornith consecutive, streaming, stop, resume sessione, tool di lettura/modifica file, errore server e riavvio.
+- Verifica grafica reale su KDE/Wayland e GPU target.
+
+M0 resta quindi **in corso**. Il prossimo obiettivo prima dell'intervento dell'utente è costruire il preflight/diagnostica e la procedura di gate locale.

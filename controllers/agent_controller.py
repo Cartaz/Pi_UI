@@ -10,7 +10,10 @@ from typing import Any, TypeAlias
 
 from core.agent import (
     AgentClient,
+    AgentInactivityTimeoutError,
+    AgentRequestTimeoutError,
     AgentTransport,
+    DeadlineScheduler,
     DiscoveredModelProfile,
     ExistingModelsConfig,
     PiLaunchSpec,
@@ -23,6 +26,7 @@ from core.agent import (
 from core.settings import AgentSettings, AppSettings, SettingsStore
 
 TransportFactory: TypeAlias = Callable[[PiLaunchSpec, int, int], AgentTransport]
+DeadlineSchedulerFactory: TypeAlias = Callable[[], DeadlineScheduler]
 StateHandler: TypeAlias = Callable[[], None]
 ProfilesHandler: TypeAlias = Callable[[tuple["AgentProfile", ...], int], None]
 MessagesResetHandler: TypeAlias = Callable[[tuple["ConversationMessage", ...]], None]
@@ -53,6 +57,7 @@ class MessageState(StrEnum):
     ACCEPTED = "accepted"
     STREAMING = "streaming"
     COMPLETE = "complete"
+    UNCERTAIN = "uncertain"
     FAILED = "failed"
 
 
@@ -96,10 +101,12 @@ class AgentController:
         settings: AppSettings | None = None,
         discovery: PiModelsConfigDiscovery | None = None,
         bootstrap: PiRuntimeBootstrap | None = None,
+        deadline_scheduler_factory: DeadlineSchedulerFactory | None = None,
     ) -> None:
         self._settings_store = settings_store
         self._settings = settings or settings_store.load()
         self._transport_factory = transport_factory
+        self._deadline_scheduler_factory = deadline_scheduler_factory
         self._discovery = discovery or PiModelsConfigDiscovery()
         self._bootstrap = bootstrap or PiRuntimeBootstrap(discovery=self._discovery)
 
@@ -113,6 +120,8 @@ class AgentController:
         self._connection_state = ConnectionState.DISCONNECTED
         self._turn_state = TurnState.IDLE
         self._session_ready = False
+        self._requires_reconciliation = False
+        self._inactivity_warning = False
         self._last_error: str | None = None
         self._status_text = "Choose an AIOS workspace"
         self._disconnect_requested = False
@@ -209,6 +218,7 @@ class AgentController:
             self._client is not None
             and self._connection_state == ConnectionState.READY
             and self._session_ready
+            and not self._requires_reconciliation
             and self._turn_state == TurnState.IDLE
         )
 
@@ -288,6 +298,8 @@ class AgentController:
         assert profile is not None
 
         self._last_error = None
+        self._inactivity_warning = False
+        self._requires_reconciliation = False
         self._diagnostic_tail = ""
         self._disconnect_requested = False
         self._session_ready = False
@@ -319,13 +331,29 @@ class AgentController:
                 agent_settings.shutdown_timeout_ms,
             )
             transport.set_diagnostic_handler(self._on_diagnostic)
-            client = AgentClient(transport)
+            scheduler = (
+                self._deadline_scheduler_factory()
+                if self._deadline_scheduler_factory is not None
+                else None
+            )
+            client = AgentClient(
+                transport,
+                deadline_scheduler=scheduler,
+                request_timeout_ms=(
+                    agent_settings.request_timeout_ms if scheduler is not None else None
+                ),
+                inactivity_timeout_ms=(
+                    agent_settings.inactivity_timeout_ms if scheduler is not None else None
+                ),
+            )
             client.set_event_handler(self._on_event)
             client.set_response_handler(self._on_response)
             client.set_queue_cleared_handler(self._on_queue_cleared)
             client.set_turn_state_handler(self._on_turn_state)
             client.set_transport_state_handler(self._on_transport_state)
             client.set_error_handler(self._on_client_error)
+            client.set_request_timeout_handler(self._on_request_timeout)
+            client.set_inactivity_timeout_handler(self._on_inactivity_timeout)
             self._transport = transport
             self._client = client
             client.start()
@@ -428,7 +456,11 @@ class AgentController:
         if self._profiles:
             selected = self.selected_profile
             assert selected is not None
-            source = "existing Pi config" if selected.source == RuntimeProfileSource.EXISTING else "Pi_UI settings"
+            source = (
+                "existing Pi config"
+                if selected.source == RuntimeProfileSource.EXISTING
+                else "Pi_UI settings"
+            )
             self._status_text = f"Ready to connect · {source}"
         elif existing.sha256 is not None:
             self._status_text = "models.json found, but no usable model profiles were discovered"
@@ -464,6 +496,8 @@ class AgentController:
             self._prompt_requests.clear()
             self._transport = None
             self._client = None
+            self._requires_reconciliation = False
+            self._inactivity_warning = False
             if self._disconnect_requested or self._last_error is None:
                 self._connection_state = ConnectionState.DISCONNECTED
                 self._status_text = "Disconnected"
@@ -474,8 +508,16 @@ class AgentController:
 
     def _on_turn_state(self, state: TurnState) -> None:
         self._turn_state = state
+        self._clear_inactivity_warning()
         if self._connection_state == ConnectionState.READY:
-            if state == TurnState.RUNNING:
+            if self._requires_reconciliation:
+                if state == TurnState.RUNNING:
+                    self._status_text = "Prompt outcome uncertain · Pi is still working"
+                elif state == TurnState.CANCELLING:
+                    self._status_text = "Outcome uncertain · stopping current turn"
+                elif state == TurnState.IDLE:
+                    self._status_text = "Prompt outcome uncertain · reconnect to reconcile"
+            elif state == TurnState.RUNNING:
                 self._status_text = "Ornith is working"
             elif state == TurnState.CANCELLING:
                 self._status_text = "Stopping current turn"
@@ -514,11 +556,13 @@ class AgentController:
         self._messages = loaded
         self._messages_reset_handler(tuple(self._messages))
         self._session_ready = True
+        self._requires_reconciliation = False
         self._connection_state = ConnectionState.READY
         self._status_text = "Ready"
         self._state_handler()
 
     def _on_response(self, response: dict[str, Any]) -> None:
+        self._clear_inactivity_warning()
         if response.get("command") != "prompt":
             return
         request_id = response.get("id")
@@ -537,6 +581,7 @@ class AgentController:
         self._state_handler()
 
     def _on_event(self, event: dict[str, Any]) -> None:
+        self._clear_inactivity_warning()
         event_type = event.get("type")
         if event_type == "message_update":
             assistant_event = event.get("assistantMessageEvent")
@@ -566,12 +611,19 @@ class AgentController:
             self._state_handler()
         elif event_type == "extension_error":
             error = event.get("error")
-            self._last_error = f"Extension error: {error}" if isinstance(error, str) else "Extension error"
+            self._last_error = (
+                f"Extension error: {error}"
+                if isinstance(error, str)
+                else "Extension error"
+            )
             self._status_text = self._last_error
             self._state_handler()
         elif event_type == "agent_settled":
             if self._active_assistant_index is not None:
-                self._replace_message(self._active_assistant_index, state=MessageState.COMPLETE)
+                self._replace_message(
+                    self._active_assistant_index,
+                    state=MessageState.COMPLETE,
+                )
                 self._active_assistant_index = None
 
     def _append_assistant_delta(self, delta: str) -> None:
@@ -580,7 +632,11 @@ class AgentController:
             index = self._append_message("assistant", "", MessageState.STREAMING)
             self._active_assistant_index = index
         current = self._messages[index]
-        self._replace_message(index, text=current.text + delta, state=MessageState.STREAMING)
+        self._replace_message(
+            index,
+            text=current.text + delta,
+            state=MessageState.STREAMING,
+        )
 
     def _finalize_assistant(self, raw_message: dict[str, Any]) -> None:
         text = _message_text(raw_message)
@@ -607,10 +663,54 @@ class AgentController:
         self._diagnostic_tail = combined
         self._state_handler()
 
+    def _on_request_timeout(self, error: AgentRequestTimeoutError) -> None:
+        if error.command == "prompt":
+            index = self._prompt_requests.pop(error.request_id, None)
+            if index is not None and 0 <= index < len(self._messages):
+                self._replace_message(index, state=MessageState.UNCERTAIN)
+            self._requires_reconciliation = True
+            self._inactivity_warning = False
+            self._last_error = (
+                "Prompt acknowledgement timed out; outcome is unknown. "
+                "Pi_UI did not resend it. Reconnect to reconcile the session."
+            )
+            self._status_text = self._last_error
+            self._state_handler()
+            return
+
+        if error.command in {"clear_queue", "abort", "steer", "follow_up"}:
+            self._requires_reconciliation = True
+            self._inactivity_warning = False
+            self._last_error = (
+                f"{error.command} acknowledgement timed out; outcome is unknown. "
+                "Pi_UI did not retry it. Reconnect before sending more work."
+            )
+            self._status_text = self._last_error
+            self._state_handler()
+            return
+
+        self._fail(error)
+
+    def _on_inactivity_timeout(self, error: AgentInactivityTimeoutError) -> None:
+        self._inactivity_warning = True
+        self._last_error = str(error)
+        self._status_text = (
+            f"No Pi RPC activity for {error.timeout_ms} ms. "
+            "The turn was not killed or retried; Stop remains available."
+        )
+        self._state_handler()
+
+    def _clear_inactivity_warning(self) -> None:
+        if not self._inactivity_warning:
+            return
+        self._inactivity_warning = False
+        self._last_error = None
+
     def _on_client_error(self, error: BaseException) -> None:
         self._fail(error)
 
     def _fail(self, error: BaseException) -> None:
+        self._inactivity_warning = False
         self._last_error = str(error) or error.__class__.__name__
         self._connection_state = ConnectionState.FAILED
         self._session_ready = False

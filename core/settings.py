@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 from core.atomic_file import atomic_write_text, fsync_directory
 
 APP_DIR_NAME: Final = "pi-ui"
-CURRENT_SCHEMA_VERSION: Final = 3
+CURRENT_SCHEMA_VERSION: Final = 4
 SUPPORTED_MODEL_APIS: Final = frozenset(
     {
         "openai-completions",
@@ -73,6 +73,8 @@ class AgentSettings:
     skip_version_check: bool = True
     offline_startup: bool = False
     startup_timeout_ms: int = 10_000
+    request_timeout_ms: int = 30_000
+    inactivity_timeout_ms: int = 180_000
     shutdown_timeout_ms: int = 5_000
 
 
@@ -166,7 +168,7 @@ def _migrate_settings(raw: Any) -> dict[str, Any]:
     version = raw.get("schema_version", 1)
     if version == CURRENT_SCHEMA_VERSION:
         return dict(raw)
-    if version not in {1, 2}:
+    if version not in {1, 2, 3}:
         raise SettingsValidationError(
             f"unsupported settings schema version: {version!r}"
         )
@@ -183,6 +185,13 @@ def _migrate_settings(raw: Any) -> dict[str, Any]:
     # Schema 3 makes server authentication explicit. Existing configurations
     # that already named an API-key environment variable preserve that intent.
     agent.setdefault("auth_mode", "env" if agent.get("api_key_env") else "none")
+
+    # Schema 4 separates quick RPC acknowledgement deadlines from model/tool
+    # inactivity so local inference can legitimately take substantially longer
+    # without making ordinary protocol commands wait indefinitely.
+    defaults = AgentSettings()
+    agent.setdefault("request_timeout_ms", defaults.request_timeout_ms)
+    agent.setdefault("inactivity_timeout_ms", defaults.inactivity_timeout_ms)
 
     migrated["agent"] = agent
     migrated["schema_version"] = CURRENT_SCHEMA_VERSION
@@ -269,7 +278,12 @@ def _parse_agent_settings(raw: dict[str, Any]) -> AgentSettings:
         ):
             raise SettingsValidationError(f"{key} must be a positive integer or null")
 
-    for key in ("startup_timeout_ms", "shutdown_timeout_ms"):
+    for key in (
+        "startup_timeout_ms",
+        "request_timeout_ms",
+        "inactivity_timeout_ms",
+        "shutdown_timeout_ms",
+    ):
         value = values[key]
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
             raise SettingsValidationError(f"{key} must be a positive integer")
