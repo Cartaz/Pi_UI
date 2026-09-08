@@ -144,7 +144,7 @@ def _build_sanitized_environment(
     if settings.offline_startup:
         env["PI_OFFLINE"] = "1"
 
-    if settings.api_key_env:
+    if settings.auth_mode == "env" and settings.api_key_env:
         secret = base_environment.get(settings.api_key_env)
         if secret:
             env[settings.api_key_env] = secret
