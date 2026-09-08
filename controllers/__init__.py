@@ -10,6 +10,7 @@ from .agent_controller import (
     RuntimeProfileSource,
 )
 from .preflight_controller import PreflightController, PreflightControllerError
+from .sandbox_gate_controller import SandboxGateController, SandboxGateControllerError
 
 __all__ = [
     "AgentController",
@@ -21,4 +22,6 @@ __all__ = [
     "PreflightController",
     "PreflightControllerError",
     "RuntimeProfileSource",
+    "SandboxGateController",
+    "SandboxGateControllerError",
 ]
