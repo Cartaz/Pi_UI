@@ -84,7 +84,8 @@ try {
   add("symlink-escape", passed, detail);
 }
 {
-  const child = spawnSync("/usr/bin/cat", [symlinkPath], { stdio: "ignore" });
+  const childCode = "const fs=require('fs');fs.readFileSync(process.argv[1])";
+  const child = spawnSync(process.execPath, ["-e", childCode, symlinkPath], { stdio: "ignore" });
   add("child-inherits", child.status !== 0, `exit=${child.status}`);
 }
 {
@@ -369,7 +370,7 @@ class SandboxGateService:
                     "label": check.label,
                     "status": str(check.status),
                     "summary": check.summary,
-                    "detail": check.detail,
+                    "detail": "",
                 }
                 for check in report.checks
             ],
