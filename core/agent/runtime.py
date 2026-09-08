@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Mapping
 
-from core.sandbox import build_bubblewrap_arguments
+from core.sandbox import SANDBOX_HOME, build_bubblewrap_arguments
 from core.settings import AgentSettings
 
 SANDBOX_WORKSPACE = PurePosixPath("/workspace")
@@ -67,7 +67,6 @@ def build_launch_spec(
     working_directory: Path,
     paths: PiRuntimePaths | None = None,
     base_environment: Mapping[str, str] | None = None,
-    user_name: str | None = None,
 ) -> PiLaunchSpec:
     """Create argv/environment for Pi RPC without invoking a shell.
 
@@ -79,13 +78,10 @@ def build_launch_spec(
 
     runtime_paths = paths or PiRuntimePaths.for_workspace(working_directory)
     base_env = dict(os.environ if base_environment is None else base_environment)
-    fake_user = user_name or base_env.get("USER") or "aios"
-    sandbox_home = PurePosixPath("/home") / fake_user
 
     environment = _build_sanitized_environment(
         settings,
         base_environment=base_env,
-        sandbox_home=sandbox_home,
         paths=runtime_paths,
     )
     pi_arguments = _build_pi_arguments(settings, runtime_paths)
@@ -104,7 +100,6 @@ def build_launch_spec(
         settings,
         host_workspace=runtime_paths.host_workspace,
         sandbox_workspace=runtime_paths.sandbox_workspace,
-        sandbox_home=sandbox_home,
         command=(str(executable), *pi_arguments),
     )
     return PiLaunchSpec(
@@ -120,11 +115,10 @@ def _build_sanitized_environment(
     settings: AgentSettings,
     *,
     base_environment: Mapping[str, str],
-    sandbox_home: PurePosixPath,
     paths: PiRuntimePaths,
 ) -> dict[str, str]:
     if settings.sandbox_enabled:
-        home = str(sandbox_home)
+        home = str(SANDBOX_HOME)
         path = f"{settings.runtime_root}/bin:/usr/bin:/bin"
         agent_dir = str(paths.sandbox_agent_dir)
         session_dir = str(paths.sandbox_session_dir)
