@@ -257,6 +257,10 @@ def _parse_agent_settings(raw: dict[str, Any]) -> AgentSettings:
         raise SettingsValidationError(
             "api_key_env is required when auth_mode is 'env'"
         )
+    if values["auth_mode"] == "none" and values["api_key_env"] is not None:
+        raise SettingsValidationError(
+            "api_key_env must be null when auth_mode is 'none'"
+        )
 
     for key in ("context_window", "max_tokens"):
         value = values[key]
