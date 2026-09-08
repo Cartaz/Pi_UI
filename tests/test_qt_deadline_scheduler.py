@@ -1,15 +1,20 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtCore import QEventLoop, QTimer
+from PySide6.QtWidgets import QApplication
 
 from ui.native.deadline_scheduler import QtDeadlineScheduler
 
 
-def _application() -> QCoreApplication:
-    instance = QCoreApplication.instance()
+def _application() -> QApplication:
+    instance = QApplication.instance()
     if instance is not None:
         return instance
-    return QCoreApplication([])
+    return QApplication([])
 
 
 def test_qt_deadline_scheduler_fires_on_event_loop() -> None:
