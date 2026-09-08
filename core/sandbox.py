@@ -7,6 +7,24 @@ from pathlib import Path, PurePosixPath
 
 from core.settings import AgentSettings
 
+_UNSAFE_RUNTIME_ROOTS = frozenset(
+    {
+        PurePosixPath("/"),
+        PurePosixPath("/home"),
+        PurePosixPath("/root"),
+        PurePosixPath("/run"),
+        PurePosixPath("/etc"),
+        PurePosixPath("/var"),
+        PurePosixPath("/tmp"),
+        PurePosixPath("/mnt"),
+        PurePosixPath("/media"),
+        PurePosixPath("/opt"),
+        PurePosixPath("/srv"),
+        PurePosixPath("/usr"),
+        PurePosixPath("/usr/local"),
+    }
+)
+
 
 class SandboxConfigurationError(ValueError):
     """Raised when a command cannot be represented inside the sandbox policy."""
@@ -39,12 +57,22 @@ def build_bubblewrap_arguments(
         raise SandboxConfigurationError(
             "sandbox runtime_root and command executable must be absolute paths"
         )
+    if runtime_root in _UNSAFE_RUNTIME_ROOTS:
+        raise SandboxConfigurationError(
+            "runtime_root is too broad for the Pi_UI confinement policy"
+        )
     if not _command_is_mounted(command_executable, runtime_root):
         raise SandboxConfigurationError(
             "sandbox command executable must be inside /usr or runtime_root"
         )
 
     workspace = host_workspace.expanduser().resolve()
+    runtime_host = Path(settings.runtime_root).expanduser().resolve()
+    if _paths_overlap(runtime_host, workspace):
+        raise SandboxConfigurationError(
+            "runtime_root must not overlap the writable AIOS workspace"
+        )
+
     return (
         "--unshare-all",
         "--share-net",
@@ -116,6 +144,8 @@ def command_is_visible_in_sandbox(
     root = PurePosixPath(runtime_root)
     if not path.is_absolute() or not root.is_absolute():
         return False
+    if root in _UNSAFE_RUNTIME_ROOTS:
+        return path.is_relative_to(PurePosixPath("/usr"))
     return _command_is_mounted(path, root)
 
 
@@ -127,3 +157,9 @@ def _command_is_mounted(executable: PurePosixPath, runtime_root: PurePosixPath) 
         except ValueError:
             continue
     return False
+
+
+def _paths_overlap(first: Path, second: Path) -> bool:
+    if first == second:
+        return True
+    return first in second.parents or second in first.parents
