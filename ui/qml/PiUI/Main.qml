@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
@@ -330,15 +332,18 @@ ApplicationWindow {
                                         font.weight: Font.DemiBold
                                     }
 
-                                    Text {
+                                    TextEdit {
                                         id: messageText
                                         width: parent.width
                                         text: messageDelegate.text
+                                        readOnly: true
                                         color: Theme.textPrimary
+                                        selectionColor: Theme.accent
+                                        selectedTextColor: Theme.surface
                                         font.family: Theme.fontFamily
                                         font.pixelSize: 14
-                                        wrapMode: Text.Wrap
-                                        textFormat: Text.PlainText
+                                        wrapMode: TextEdit.Wrap
+                                        textFormat: TextEdit.PlainText
                                         selectByMouse: true
                                     }
 
