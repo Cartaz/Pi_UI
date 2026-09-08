@@ -38,10 +38,13 @@ class QProcessAgentTransport(QObject):
         super().__init__(parent)
         if startup_timeout_ms <= 0 or shutdown_timeout_ms <= 0:
             raise ValueError("process timeouts must be positive")
+        if max_record_bytes <= 0:
+            raise ValueError("max_record_bytes must be positive")
 
         self._spec = launch_spec
         self._startup_timeout_ms = startup_timeout_ms
         self._shutdown_timeout_ms = shutdown_timeout_ms
+        self._max_record_bytes = max_record_bytes
         self._state = TransportState.STOPPED
         self._decoder = JsonlDecoder(max_record_bytes=max_record_bytes)
         self._stderr_decoder = codecs.getincrementaldecoder("utf-8")("replace")
@@ -84,13 +87,17 @@ class QProcessAgentTransport(QObject):
         self._state_handler = handler
 
     def start(self) -> None:
-        if self._process.state() is not QProcess.ProcessState.NotRunning:
+        if self._process.state() != QProcess.ProcessState.NotRunning:
             raise QProcessTransportError("Pi process is already running")
-        if self._state in {TransportState.STARTING, TransportState.READY, TransportState.STOPPING}:
+        if self._state in {
+            TransportState.STARTING,
+            TransportState.READY,
+            TransportState.STOPPING,
+        }:
             raise QProcessTransportError(f"cannot start transport while {self._state}")
 
         prepare_runtime_paths(self._spec.paths)
-        self._decoder = JsonlDecoder()
+        self._decoder = JsonlDecoder(max_record_bytes=self._max_record_bytes)
         self._stderr_decoder = codecs.getincrementaldecoder("utf-8")("replace")
 
         environment = QProcessEnvironment()
@@ -107,7 +114,7 @@ class QProcessAgentTransport(QObject):
         self._process.start()
 
     def send(self, command: Mapping[str, Any]) -> None:
-        if self._state is not TransportState.READY:
+        if self._state != TransportState.READY:
             raise QProcessTransportError(
                 f"cannot send RPC command while transport is {self._state}"
             )
@@ -120,8 +127,8 @@ class QProcessAgentTransport(QObject):
 
     def stop(self) -> None:
         self._startup_timer.stop()
-        if self._process.state() is QProcess.ProcessState.NotRunning:
-            if self._state is not TransportState.FAILED:
+        if self._process.state() == QProcess.ProcessState.NotRunning:
+            if self._state != TransportState.FAILED:
                 self._set_state(TransportState.STOPPED)
             return
 
@@ -155,13 +162,14 @@ class QProcessAgentTransport(QObject):
             self._diagnostic_handler(text)
 
     def _on_process_error(self, process_error: QProcess.ProcessError) -> None:
-        error = QProcessTransportError(
-            f"QProcess error {process_error.name}: {self._process.errorString()}"
-        )
-        if self._state is TransportState.STOPPING:
-            self._error_handler(error)
+        if self._state in {TransportState.STOPPING, TransportState.FAILED}:
             return
-        self._fail(error, kill_process=False)
+        self._fail(
+            QProcessTransportError(
+                f"QProcess error {process_error.name}: {self._process.errorString()}"
+            ),
+            kill_process=False,
+        )
 
     def _on_finished(
         self,
@@ -172,19 +180,19 @@ class QProcessAgentTransport(QObject):
         self._shutdown_timer.stop()
         self._flush_stderr()
 
-        if self._state is not TransportState.STOPPING:
+        if self._state != TransportState.STOPPING:
             try:
                 self._decoder.finish()
             except JsonlProtocolError as exc:
                 self._fail(exc, kill_process=False)
                 return
 
-        if self._state is TransportState.STOPPING:
+        if self._state == TransportState.STOPPING:
             self._set_state(TransportState.STOPPED)
             return
-        if self._state is TransportState.FAILED:
+        if self._state == TransportState.FAILED:
             return
-        if exit_status is QProcess.ExitStatus.NormalExit and exit_code == 0:
+        if exit_status == QProcess.ExitStatus.NormalExit and exit_code == 0:
             self._set_state(TransportState.STOPPED)
             return
 
@@ -196,7 +204,7 @@ class QProcessAgentTransport(QObject):
         )
 
     def _on_startup_timeout(self) -> None:
-        if self._state is not TransportState.STARTING:
+        if self._state != TransportState.STARTING:
             return
         self._fail(
             QProcessTransportError(
@@ -206,7 +214,7 @@ class QProcessAgentTransport(QObject):
         )
 
     def _force_kill(self) -> None:
-        if self._process.state() is QProcess.ProcessState.NotRunning:
+        if self._process.state() == QProcess.ProcessState.NotRunning:
             return
         self._process.kill()
 
@@ -221,11 +229,11 @@ class QProcessAgentTransport(QObject):
         self._shutdown_timer.stop()
         self._set_state(TransportState.FAILED)
         self._error_handler(error)
-        if kill_process and self._process.state() is not QProcess.ProcessState.NotRunning:
+        if kill_process and self._process.state() != QProcess.ProcessState.NotRunning:
             self._process.kill()
 
     def _set_state(self, state: TransportState) -> None:
-        if state is self._state:
+        if state == self._state:
             return
         self._state = state
         self._state_handler(state)
