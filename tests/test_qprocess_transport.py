@@ -44,7 +44,11 @@ for line in sys.stdin:
     spec = PiLaunchSpec(
         executable=sys.executable,
         arguments=("-u", str(script)),
-        environment={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
+        environment={
+            "HOME": str(tmp_path),
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8",
+        },
         working_directory=tmp_path,
         paths=paths,
     )
@@ -59,11 +63,13 @@ for line in sys.stdin:
     diagnostics: list[str] = []
     errors: list[BaseException] = []
     loop = QEventLoop()
+    watchdog = QTimer()
+    watchdog.setSingleShot(True)
     timed_out = False
 
     def on_state(state: TransportState) -> None:
         states.append(state)
-        if state is TransportState.READY:
+        if state == TransportState.READY:
             transport.send({"id": "req-1", "type": "get_state"})
         elif state in {TransportState.STOPPED, TransportState.FAILED}:
             loop.quit()
@@ -82,10 +88,12 @@ for line in sys.stdin:
     transport.set_record_handler(on_record)
     transport.set_diagnostic_handler(diagnostics.append)
     transport.set_error_handler(errors.append)
+    watchdog.timeout.connect(timeout)
 
-    QTimer.singleShot(5_000, timeout)
+    watchdog.start(5_000)
     transport.start()
     loop.exec()
+    watchdog.stop()
 
     assert not timed_out
     assert not errors
@@ -98,7 +106,7 @@ for line in sys.stdin:
         }
     ]
     assert "diagnostic: booted" in "".join(diagnostics)
-    assert states[0] is TransportState.STARTING
+    assert states[0] == TransportState.STARTING
     assert TransportState.READY in states
     assert TransportState.STOPPING in states
-    assert states[-1] is TransportState.STOPPED
+    assert states[-1] == TransportState.STOPPED
