@@ -1,20 +1,24 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtCore import QEventLoop, QTimer
+from PySide6.QtWidgets import QApplication
 
 from core.agent.runtime import PiLaunchSpec, PiRuntimePaths
 from core.agent.transport import TransportState
 from ui.native.agent_process import QProcessAgentTransport
 
 
-def _application() -> QCoreApplication:
-    instance = QCoreApplication.instance()
+def _application() -> QApplication:
+    instance = QApplication.instance()
     if instance is not None:
         return instance
-    return QCoreApplication([])
+    return QApplication([])
 
 
 def test_qprocess_transport_keeps_stdout_protocol_separate_from_stderr(
