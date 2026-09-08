@@ -14,7 +14,13 @@ from uuid import uuid4
 
 from core.agent.runtime import PiRuntimePaths, SANDBOX_WORKSPACE
 from core.preflight import CommandProbe, CommandProbeResult, PreflightCheck, PreflightStatus
-from core.sandbox import SANDBOX_HOME, build_bubblewrap_arguments, command_is_visible_in_sandbox
+from core.sandbox import (
+    SANDBOX_HOME,
+    SandboxConfigurationError,
+    build_bubblewrap_arguments,
+    command_is_visible_in_sandbox,
+    validate_sandbox_paths,
+)
 from core.settings import AgentSettings
 
 _GATE_TIMEOUT_MS: Final = 10_000
@@ -173,6 +179,11 @@ class SandboxGateService:
         workspace = workspace.expanduser().resolve()
         if not workspace.is_dir():
             raise SandboxGateError(f"workspace is unavailable: {workspace}")
+        try:
+            validate_sandbox_paths(settings, host_workspace=workspace)
+        except SandboxConfigurationError as exc:
+            raise SandboxGateError(str(exc)) from exc
+
         if not command_is_visible_in_sandbox(
             node_executable,
             runtime_root=settings.runtime_root,
