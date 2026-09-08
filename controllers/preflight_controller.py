@@ -68,6 +68,7 @@ class PreflightController:
         self._checks: list[PreflightCheck] = []
         self._probe_indices: dict[str, int] = {}
         self._running = False
+        self._generation = 0
         self._status_text = "Preflight not run"
         self._manifest = ""
         self._state_handler: StateHandler = lambda: None
@@ -115,6 +116,8 @@ class PreflightController:
         if self._running:
             raise PreflightControllerError("preflight is already running")
 
+        self._generation += 1
+        run_id = self._generation
         workspace = self._agent_controller.workspace
         existing = None
         if workspace is not None:
@@ -134,7 +137,7 @@ class PreflightController:
         self._checks_reset_handler(tuple(self._checks))
 
         if not plan.probes:
-            self._finish()
+            self._finish(run_id)
             return
 
         self._running = True
@@ -146,10 +149,15 @@ class PreflightController:
             runner.start(
                 plan.probes,
                 environment=plan.environment,
-                result_handler=lambda result: self._on_probe_result(plan.probes, result),
-                finished_handler=self._finish,
+                result_handler=lambda result: self._on_probe_result(
+                    plan.probes,
+                    result,
+                    run_id,
+                ),
+                finished_handler=lambda: self._finish(run_id),
             )
         except BaseException as exc:
+            self._generation += 1
             self._runner = None
             self._running = False
             self._status_text = f"Preflight runner failed to start: {exc}"
@@ -157,6 +165,7 @@ class PreflightController:
             raise
 
     def cancel(self) -> None:
+        self._generation += 1
         runner = self._runner
         if runner is not None:
             runner.cancel()
@@ -169,7 +178,10 @@ class PreflightController:
         self,
         probes: tuple[CommandProbe, ...],
         result: CommandProbeResult,
+        run_id: int,
     ) -> None:
+        if run_id != self._generation:
+            return
         probe = next((item for item in probes if item.probe_id == result.probe_id), None)
         if probe is None:
             return
@@ -181,7 +193,9 @@ class PreflightController:
         self._check_changed_handler(index, check)
         self._state_handler()
 
-    def _finish(self) -> None:
+    def _finish(self, run_id: int) -> None:
+        if run_id != self._generation:
+            return
         self._runner = None
         self._running = False
         self._manifest = sanitized_manifest_json(tuple(self._checks), self._facts)
