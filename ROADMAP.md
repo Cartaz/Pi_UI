@@ -26,20 +26,16 @@ La prima versione utilizzabile è M1; questa esperienza completa diventa criteri
 | Dentro il percorso iniziale | Fuori dalla prima versione |
 |---|---|
 | Un workspace permanente, molte conversazioni | Gestione multiprogetto e collaborazione multiutente |
-| Una sessione agente attiva | Orchestrazione multiagente parallela e gestione completa dei subagents |
+| Una sessione agente attiva | Orchestrazione multiagente parallela |
 | Pi locale, un profilo Ornith LAN | Marketplace di modelli, training e gestione del server |
 | Chat, albero file, editor testuale, diff/versioni | IDE, debugger o terminale come centro della UI |
 | Importazione, testo/Markdown e PDF testuale | OCR, audio/video, fogli complessi e office editing completo |
 | Ricerca testuale e contesto selettivo | Database vettoriale o knowledge graph obbligatorio |
 | Dati locali e backup esplicito | Cloud sync o telemetria automatica |
 
+L'orchestrazione multiagente parallela resta fuori dalla prima versione, ma **la gestione dei subagents è un requisito futuro di prima classe del prodotto**. Dovrà avere un sistema dedicato per definizione/ruolo, modello e contesto, lifecycle, delega, permessi/tool, osservabilità, stato, risultati, errori e rapporto con l'agente principale. La scelta di API, scheduling, parallelismo, memoria condivisa e UX viene deliberatamente rinviata finché non saranno raccolti use case concreti; l'architettura iniziale non deve però rendere strutturale il vincolo di una sola sessione/agente.
+
 I file non supportati possono essere conservati come originali e aperti nell'app esterna, con stato esplicito. “Importato” non equivale a “indicizzato” né a “letto dal modello”.
-
-### Appunto progettuale futuro — Subagents
-
-Pi_UI dovrà avere un **sistema di gestione dei subagents di prima classe**, pensato come parte importante dell'AI OS e non come una raccolta di prompt o processi nascosti. La progettazione dettagliata è intenzionalmente rinviata: prima di fissare API, UI o modello di orchestrazione verranno discussi insieme casi d'uso, livelli di autonomia, lifecycle, contesto, strumenti, permessi, osservabilità e rapporto con l'agente principale.
-
-La roadmap iniziale mantiene quindi una sola sessione agente attiva, ma l'architettura non deve introdurre dipendenze che rendano inutilmente difficile aggiungere in seguito una gestione robusta dei subagents. Nessuna implementazione multiagente speculativa viene anticipata nelle milestone correnti.
 
 ## 3. Mappa delle milestone
 
@@ -151,8 +147,9 @@ Robustezza, accessibilità e protezione dei dati iniziano in M0/M1: M5 consolida
 - [ ] M4.4 Azioni esterne osservabili e autorizzate, con anteprima quando utile e nessuna dichiarazione di invio/salvataggio prima dell'esito reale. Le policy risiedono nei servizi e negli strumenti, non nei soli pulsanti.
 - [ ] M4.5 Scheduler locale con timezone, ora legale, macchina sospesa, esecuzioni perse, lock contro sovrapposizione e idempotenza. Definire se opera solo con app aperta o tramite servizio esplicito.
 - [ ] M4.6 Cronologia delle esecuzioni, sorgenti usate, stop e retry controllato. Le routine entrano nella stessa coda dell'unica sessione attiva.
+- [ ] M4.7 Progettare e implementare un sistema dedicato di gestione dei subagents, dopo aver definito con l'utente i casi d'uso prioritari. Devono essere espliciti almeno identità/ruolo, stato e lifecycle, modello/contesto, delega e ritorno risultati, permessi/tool, osservabilità, error handling e relazione con l'agente principale. Evitare di fissare oggi parallelismo, memoria condivisa o UX senza evidenze d'uso.
 
-**Accettazione:** una procedura utile completata manualmente e, se schedulata, una volta sola nella finestra prevista; disconnessione e riavvio non duplicano effetti; nessun invio esterno senza autorizzazione applicabile; errore visibile e recuperabile.
+**Accettazione:** una procedura utile completata manualmente e, se schedulata, una volta sola nella finestra prevista; disconnessione e riavvio non duplicano effetti; nessun invio esterno senza autorizzazione applicabile; errore visibile e recuperabile. I criteri di accettazione specifici dei subagents saranno definiti quando il relativo design verrà aperto.
 
 ## 9. M5 — Robustezza e distribuzione
 
@@ -183,6 +180,7 @@ Robustezza, accessibilità e protezione dei dati iniziano in M0/M1: M5 consolida
 | Estensione TypeScript duplica il backend | Trasporto minimo verso servizi Python; contratto unico | M2 |
 | Neumorfismo compromette leggibilità/prestazioni | Focus/contrasto e misure su GPU, effetti condivisi | M1, M5 |
 | Automazione ripete un'azione esterna | ID esecuzione, stato persistente e recupero dell'esito prima del retry | M4 |
+| Subagents introducono ownership o concorrenza ambigua | Definire casi d'uso, ownership, lifecycle, permessi, stato e osservabilità prima di scegliere l'orchestrazione | Design subagents |
 
 ## 11. Ordine delle prime attività
 
@@ -192,6 +190,6 @@ Robustezza, accessibilità e protezione dei dati iniziano in M0/M1: M5 consolida
 4. M0.10–M0.11: shell minima, prova reale e report; chiudere M0 solo con evidenze.
 5. M1: chat e file in incrementi completi, prima lettura e poi scrittura/versioni verificate.
 6. M2–M3: ricerca, citazioni e memoria valutate sul campione reale.
-7. M4: una routine selezionata; M5: consolidamento e release.
+7. M4: una routine selezionata e design subagents quando i casi d'uso sono definiti; M5: consolidamento e release.
 
 Ogni milestone chiude con revisione strategica di ownership, duplicazioni, confini Qt/Python/Pi e complessità introdotta. Eventuali deviazioni vanno in [DECISIONS.md](docs/DECISIONS.md); criteri e prove in [VALIDATION.md](docs/VALIDATION.md). Fonti e fatti upstream sono raccolti in [SOURCES.md](docs/SOURCES.md).
