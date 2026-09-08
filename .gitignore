@@ -1,0 +1,29 @@
+# Python / tooling
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# Pi extension development
+node_modules/
+
+# Local configuration and runtime data, never source fixtures
+.env
+.env.*
+!.env.example
+.pi/
+workspace/
+runtime/
+local-data/
+*.log
+
+# Desktop metadata
+.DS_Store
+Thumbs.db
