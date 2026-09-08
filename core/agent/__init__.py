@@ -1,6 +1,12 @@
 """Pi Agent protocol, state and transport abstractions."""
 
 from .client import AgentClient, AgentClientError, TurnState
+from .model_config import (
+    LOCAL_AUTH_PLACEHOLDER,
+    ModelConfigError,
+    ModelsConfigWriteResult,
+    PiModelsConfigManager,
+)
 from .protocol import JsonlDecoder, JsonlProtocolError, encode_command
 from .runtime import (
     PiLaunchSpec,
@@ -17,7 +23,11 @@ __all__ = [
     "AgentTransport",
     "JsonlDecoder",
     "JsonlProtocolError",
+    "LOCAL_AUTH_PLACEHOLDER",
+    "ModelConfigError",
+    "ModelsConfigWriteResult",
     "PiLaunchSpec",
+    "PiModelsConfigManager",
     "PiRuntimePaths",
     "RuntimeConfigurationError",
     "TransportState",
