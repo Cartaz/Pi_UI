@@ -49,6 +49,7 @@ class DiscoveredModelProfile:
 @dataclass(frozen=True, slots=True)
 class ExistingModelsConfig:
     path: Path
+    sha256: str | None
     management_state: ModelConfigManagementState
     profiles: tuple[DiscoveredModelProfile, ...]
 
@@ -62,6 +63,7 @@ class PiModelsConfigDiscovery:
         if not target.exists():
             return ExistingModelsConfig(
                 path=target,
+                sha256=None,
                 management_state=(
                     ModelConfigManagementState.CHANGED_EXTERNALLY
                     if marker.exists()
@@ -71,16 +73,19 @@ class PiModelsConfigDiscovery:
             )
 
         try:
-            raw = json.loads(target.read_text(encoding="utf-8"))
+            raw_bytes = target.read_bytes()
+            raw = json.loads(raw_bytes.decode("utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise ModelConfigError(f"existing Pi models config is invalid: {target}") from exc
         if not isinstance(raw, dict):
             raise ModelConfigError("existing Pi models config root must be an object")
 
+        digest = hashlib.sha256(raw_bytes).hexdigest()
         profiles = tuple(self._profiles(raw))
         return ExistingModelsConfig(
             path=target,
-            management_state=self._management_state(target, marker),
+            sha256=digest,
+            management_state=self._management_state(target, marker, digest),
             profiles=profiles,
         )
 
@@ -133,6 +138,7 @@ class PiModelsConfigDiscovery:
     def _management_state(
         target: Path,
         marker: Path,
+        actual_hash: str,
     ) -> ModelConfigManagementState:
         if not marker.exists():
             return ModelConfigManagementState.UNMANAGED
@@ -146,7 +152,6 @@ class PiModelsConfigDiscovery:
                 or not isinstance(expected_hash, str)
             ):
                 return ModelConfigManagementState.CHANGED_EXTERNALLY
-            actual_hash = hashlib.sha256(target.read_bytes()).hexdigest()
         except (OSError, UnicodeError, json.JSONDecodeError):
             return ModelConfigManagementState.CHANGED_EXTERNALLY
         return (
