@@ -149,9 +149,11 @@ class PreflightController:
                 result_handler=lambda result: self._on_probe_result(plan.probes, result),
                 finished_handler=self._finish,
             )
-        except BaseException:
+        except BaseException as exc:
             self._runner = None
             self._running = False
+            self._status_text = f"Preflight runner failed to start: {exc}"
+            self._state_handler()
             raise
 
     def cancel(self) -> None:
