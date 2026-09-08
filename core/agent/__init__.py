@@ -9,7 +9,14 @@ from .bootstrap import (
     PreparedPiRuntime,
     RuntimeModelConfigSource,
 )
-from .client import AgentClient, AgentClientError, TurnState
+from .client import (
+    AgentClient,
+    AgentClientError,
+    AgentInactivityTimeoutError,
+    AgentRequestTimeoutError,
+    TurnState,
+)
+from .deadlines import DeadlineHandle, DeadlineScheduler
 from .model_config import (
     LOCAL_AUTH_PLACEHOLDER,
     MANAGED_MARKER_FILENAME,
@@ -40,7 +47,11 @@ from .transport import AgentTransport, TransportState
 __all__ = [
     "AgentClient",
     "AgentClientError",
+    "AgentInactivityTimeoutError",
+    "AgentRequestTimeoutError",
     "AgentTransport",
+    "DeadlineHandle",
+    "DeadlineScheduler",
     "DiscoveredModelProfile",
     "ExistingAuthKind",
     "ExistingModelsConfig",
