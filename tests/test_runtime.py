@@ -48,6 +48,10 @@ def test_sandbox_launch_spec_matches_aios_confinement(tmp_path: Path) -> None:
         "--new-session",
     )
     assert ("--ro-bind", "/usr", "/usr") == args[4:7]
+    assert _contains_triplet(args, "--symlink", "usr/bin", "/bin")
+    assert _contains_triplet(args, "--symlink", "usr/sbin", "/sbin")
+    assert _contains_triplet(args, "--symlink", "usr/lib", "/lib")
+    assert _contains_triplet(args, "--symlink", "usr/lib64", "/lib64")
     assert "--tmpfs" in args
     assert "/home" in args
     assert "/home/tester" in args
@@ -133,3 +137,10 @@ def test_direct_launch_is_explicit_and_uses_host_paths(tmp_path: Path) -> None:
     )
     assert spec.environment["PI_OFFLINE"] == "1"
     assert "PI_SKIP_VERSION_CHECK" not in spec.environment
+
+
+def _contains_triplet(args: tuple[str, ...], first: str, second: str, third: str) -> bool:
+    return any(
+        args[index : index + 3] == (first, second, third)
+        for index in range(len(args) - 2)
+    )
