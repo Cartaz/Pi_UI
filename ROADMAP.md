@@ -26,7 +26,7 @@ La prima versione utilizzabile è M1; questa esperienza completa diventa criteri
 | Dentro il percorso iniziale | Fuori dalla prima versione |
 |---|---|
 | Un workspace permanente, molte conversazioni | Gestione multiprogetto e collaborazione multiutente |
-| Una sessione agente attiva | Orchestrazione multiagente parallela |
+| Una sessione agente attiva | Orchestrazione multiagente parallela e gestione completa dei subagents |
 | Pi locale, un profilo Ornith LAN | Marketplace di modelli, training e gestione del server |
 | Chat, albero file, editor testuale, diff/versioni | IDE, debugger o terminale come centro della UI |
 | Importazione, testo/Markdown e PDF testuale | OCR, audio/video, fogli complessi e office editing completo |
@@ -34,6 +34,12 @@ La prima versione utilizzabile è M1; questa esperienza completa diventa criteri
 | Dati locali e backup esplicito | Cloud sync o telemetria automatica |
 
 I file non supportati possono essere conservati come originali e aperti nell'app esterna, con stato esplicito. “Importato” non equivale a “indicizzato” né a “letto dal modello”.
+
+### Appunto progettuale futuro — Subagents
+
+Pi_UI dovrà avere un **sistema di gestione dei subagents di prima classe**, pensato come parte importante dell'AI OS e non come una raccolta di prompt o processi nascosti. La progettazione dettagliata è intenzionalmente rinviata: prima di fissare API, UI o modello di orchestrazione verranno discussi insieme casi d'uso, livelli di autonomia, lifecycle, contesto, strumenti, permessi, osservabilità e rapporto con l'agente principale.
+
+La roadmap iniziale mantiene quindi una sola sessione agente attiva, ma l'architettura non deve introdurre dipendenze che rendano inutilmente difficile aggiungere in seguito una gestione robusta dei subagents. Nessuna implementazione multiagente speculativa viene anticipata nelle milestone correnti.
 
 ## 3. Mappa delle milestone
 
