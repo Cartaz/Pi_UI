@@ -87,6 +87,61 @@ def test_policy_rejects_command_from_unmounted_host_tree(tmp_path: Path) -> None
         )
 
 
+@pytest.mark.parametrize(
+    "runtime_root",
+    [
+        "/",
+        "/home",
+        "/root",
+        "/run",
+        "/etc",
+        "/var",
+        "/tmp",
+        "/mnt",
+        "/media",
+        "/opt",
+        "/srv",
+        "/usr",
+        "/usr/local",
+    ],
+)
+def test_policy_rejects_overbroad_runtime_mounts(tmp_path: Path, runtime_root: str) -> None:
+    workspace = tmp_path / "AIOS"
+    workspace.mkdir()
+    settings = AgentSettings(
+        executable=f"{runtime_root.rstrip('/')}/bin/pi" if runtime_root != "/" else "/bin/pi",
+        runtime_root=runtime_root,
+    )
+
+    with pytest.raises(SandboxConfigurationError, match="too broad"):
+        build_bubblewrap_arguments(
+            settings,
+            host_workspace=workspace,
+            sandbox_workspace=PurePosixPath("/workspace"),
+            sandbox_home=PurePosixPath("/home/tester"),
+            command=(settings.executable,),
+        )
+
+
+def test_policy_rejects_runtime_overlapping_writable_workspace(tmp_path: Path) -> None:
+    workspace = tmp_path / "AIOS"
+    workspace.mkdir()
+    runtime_root = workspace / ".runtime"
+    settings = AgentSettings(
+        executable=str(runtime_root / "bin" / "pi"),
+        runtime_root=str(runtime_root),
+    )
+
+    with pytest.raises(SandboxConfigurationError, match="must not overlap"):
+        build_bubblewrap_arguments(
+            settings,
+            host_workspace=workspace,
+            sandbox_workspace=PurePosixPath("/workspace"),
+            sandbox_home=PurePosixPath("/home/tester"),
+            command=(settings.executable,),
+        )
+
+
 def _contains_triplet(args: tuple[str, ...], first: str, second: str, third: str) -> bool:
     return any(
         args[index : index + 3] == (first, second, third)
