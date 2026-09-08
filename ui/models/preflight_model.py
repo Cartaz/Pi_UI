@@ -1,14 +1,33 @@
-"""Qt list model for M0 preflight checks."""
+"""Qt list model for presentation-ready diagnostic checks."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Protocol
+
 from PySide6.QtCore import QAbstractListModel, QModelIndex, Qt
 
-from controllers.preflight_controller import PreflightController
 from core.preflight import PreflightCheck
 
 
+class CheckSource(Protocol):
+    @property
+    def checks(self) -> tuple[PreflightCheck, ...]: ...
+
+    def set_checks_reset_handler(
+        self,
+        handler: Callable[[tuple[PreflightCheck, ...]], None],
+    ) -> None: ...
+
+    def set_check_changed_handler(
+        self,
+        handler: Callable[[int, PreflightCheck], None],
+    ) -> None: ...
+
+
 class PreflightListModel(QAbstractListModel):
+    """Project a focused diagnostic controller into stable QML roles."""
+
     LabelRole = Qt.ItemDataRole.UserRole + 1
     StatusRole = Qt.ItemDataRole.UserRole + 2
     SummaryRole = Qt.ItemDataRole.UserRole + 3
@@ -16,7 +35,7 @@ class PreflightListModel(QAbstractListModel):
 
     def __init__(
         self,
-        controller: PreflightController,
+        controller: CheckSource,
         parent=None,
     ) -> None:
         super().__init__(parent)
