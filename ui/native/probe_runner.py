@@ -27,6 +27,7 @@ class QtProbeRunner(QObject):
         self._stderr = bytearray()
         self._timed_out = False
         self._reported = False
+        self._cancelled = False
 
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -50,18 +51,29 @@ class QtProbeRunner(QObject):
         self._environment = tuple(environment)
         self._result_handler = result_handler
         self._finished_handler = finished_handler
+        self._cancelled = False
         self._start_next()
 
     def cancel(self) -> None:
         self._queue.clear()
         self._timer.stop()
+        self._cancelled = True
+        self._reported = True
+        self._result_handler = lambda _result: None
+        self._finished_handler = lambda: None
         process = self._process
-        if process is not None and process.state() != QProcess.ProcessState.NotRunning:
-            process.kill()
         self._process = None
         self._probe = None
+        if process is not None:
+            if process.state() != QProcess.ProcessState.NotRunning:
+                process.kill()
+            process.deleteLater()
 
     def _start_next(self) -> None:
+        if self._cancelled:
+            self._process = None
+            self._probe = None
+            return
         if not self._queue:
             self._process = None
             self._probe = None
@@ -103,14 +115,14 @@ class QtProbeRunner(QObject):
 
     def _on_timeout(self) -> None:
         process = self._process
-        if process is None:
+        if process is None or self._cancelled:
             return
         self._timed_out = True
         if process.state() != QProcess.ProcessState.NotRunning:
             process.kill()
 
     def _on_error(self, error: QProcess.ProcessError) -> None:
-        if self._reported:
+        if self._reported or self._cancelled:
             return
         if error not in {
             QProcess.ProcessError.FailedToStart,
@@ -128,7 +140,7 @@ class QtProbeRunner(QObject):
             self._dispose_and_continue()
 
     def _on_finished(self, exit_code: int, _exit_status: QProcess.ExitStatus) -> None:
-        if self._reported:
+        if self._reported or self._cancelled:
             return
         self._read_stdout()
         self._read_stderr()
@@ -142,7 +154,7 @@ class QtProbeRunner(QObject):
         start_error: str | None = None,
     ) -> None:
         probe = self._probe
-        if probe is None or self._reported:
+        if probe is None or self._reported or self._cancelled:
             return
         self._reported = True
         self._timer.stop()
