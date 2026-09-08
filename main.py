@@ -10,15 +10,17 @@ from PySide6.QtCore import QCoreApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication
 
-from controllers.agent_controller import AgentController
+from controllers import AgentController, PreflightController
 from core.agent.runtime import PiLaunchSpec
 from core.settings import SettingsStore
-from ui.adapters import AgentAdapter
-from ui.models import AgentProfileListModel, MessageListModel
+from ui.adapters import AgentAdapter, PreflightAdapter
+from ui.models import AgentProfileListModel, MessageListModel, PreflightListModel
 from ui.native import (
     AppShutdownCoordinator,
     QProcessAgentTransport,
     QtDeadlineScheduler,
+    QtProbeRunner,
+    collect_host_runtime_facts,
 )
 
 LOGGER = logging.getLogger("pi_ui")
@@ -61,9 +63,17 @@ def main() -> int:
         settings=settings,
         deadline_scheduler_factory=QtDeadlineScheduler,
     )
+    preflight_controller = PreflightController(
+        controller,
+        lambda: QtProbeRunner(app),
+        collect_host_runtime_facts(),
+    )
+
     message_model = MessageListModel(controller)
     profile_model = AgentProfileListModel(controller)
+    preflight_model = PreflightListModel(preflight_controller)
     agent_adapter = AgentAdapter(controller)
+    preflight_adapter = PreflightAdapter(preflight_controller)
 
     engine = QQmlApplicationEngine()
     qml_root = Path(__file__).resolve().parent / "ui" / "qml"
@@ -73,12 +83,15 @@ def main() -> int:
             "agentAdapter": agent_adapter,
             "messageModel": message_model,
             "profileModel": profile_model,
+            "preflightAdapter": preflight_adapter,
+            "preflightModel": preflight_model,
         }
     )
     engine.loadFromModule("PiUI", "Main")
 
     if not engine.rootObjects():
         LOGGER.critical("QML shell failed to load")
+        preflight_controller.cancel()
         controller.shutdown()
         return 1
 
@@ -94,7 +107,9 @@ def main() -> int:
     # Keep the event loop alive after the last window closes so QProcess can
     # complete its asynchronous terminate -> timeout -> kill lifecycle.
     app.setQuitOnLastWindowClosed(False)
+    app.lastWindowClosed.connect(preflight_controller.cancel)
     app.lastWindowClosed.connect(shutdown_coordinator.request_shutdown)
+    app.aboutToQuit.connect(preflight_controller.cancel)
     app.aboutToQuit.connect(controller.shutdown)
     return app.exec()
 
