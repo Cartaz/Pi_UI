@@ -10,10 +10,10 @@ from PySide6.QtCore import QCoreApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication
 
-from controllers import AgentController, PreflightController
+from controllers import AgentController, PreflightController, SandboxGateController
 from core.agent.runtime import PiLaunchSpec
 from core.settings import SettingsStore
-from ui.adapters import AgentAdapter, PreflightAdapter
+from ui.adapters import AgentAdapter, PreflightAdapter, SandboxGateAdapter
 from ui.models import AgentProfileListModel, MessageListModel, PreflightListModel
 from ui.native import (
     AppShutdownCoordinator,
@@ -63,17 +63,25 @@ def main() -> int:
         settings=settings,
         deadline_scheduler_factory=QtDeadlineScheduler,
     )
+    host_facts = collect_host_runtime_facts()
     preflight_controller = PreflightController(
         controller,
         lambda: QtProbeRunner(app),
-        collect_host_runtime_facts(),
+        host_facts,
+    )
+    sandbox_gate_controller = SandboxGateController(
+        controller,
+        lambda: QtProbeRunner(app),
+        host_facts,
     )
 
     message_model = MessageListModel(controller)
     profile_model = AgentProfileListModel(controller)
     preflight_model = PreflightListModel(preflight_controller)
+    sandbox_gate_model = PreflightListModel(sandbox_gate_controller)
     agent_adapter = AgentAdapter(controller)
     preflight_adapter = PreflightAdapter(preflight_controller)
+    sandbox_gate_adapter = SandboxGateAdapter(sandbox_gate_controller)
 
     engine = QQmlApplicationEngine()
     qml_root = Path(__file__).resolve().parent / "ui" / "qml"
@@ -85,12 +93,15 @@ def main() -> int:
             "profileModel": profile_model,
             "preflightAdapter": preflight_adapter,
             "preflightModel": preflight_model,
+            "sandboxGateAdapter": sandbox_gate_adapter,
+            "sandboxGateModel": sandbox_gate_model,
         }
     )
     engine.loadFromModule("PiUI", "Main")
 
     if not engine.rootObjects():
         LOGGER.critical("QML shell failed to load")
+        sandbox_gate_controller.cancel()
         preflight_controller.cancel()
         controller.shutdown()
         return 1
@@ -107,8 +118,10 @@ def main() -> int:
     # Keep the event loop alive after the last window closes so QProcess can
     # complete its asynchronous terminate -> timeout -> kill lifecycle.
     app.setQuitOnLastWindowClosed(False)
+    app.lastWindowClosed.connect(sandbox_gate_controller.cancel)
     app.lastWindowClosed.connect(preflight_controller.cancel)
     app.lastWindowClosed.connect(shutdown_coordinator.request_shutdown)
+    app.aboutToQuit.connect(sandbox_gate_controller.cancel)
     app.aboutToQuit.connect(preflight_controller.cancel)
     app.aboutToQuit.connect(controller.shutdown)
     return app.exec()
