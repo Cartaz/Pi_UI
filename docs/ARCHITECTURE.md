@@ -4,22 +4,26 @@ Stato: progetto da implementare. I nomi di moduli e API in questo documento sono
 
 ## Confini di esecuzione
 
-GUI Python/Qt, Pi e strumenti che lavorano sui documenti girano sul desktop dell'utente. Il server LAN ospita l'inferenza Ornith. Workspace e software sono directory distinte: il primo contiene dati personali, il secondo codice versionato pubblicamente.
+La GUI Python/Qt gira normalmente sul desktop dell'utente. Su Linux, Pi Agent e tutti i processi figli avviati da Pi girano invece dentro una sandbox Bubblewrap posseduta dall'app. Il server LAN ospita l'inferenza Ornith. Workspace e software sono directory distinte: il primo contiene dati personali, il secondo codice versionato pubblicamente.
 
 ```mermaid
 flowchart TD
     Q["Presentazione QML"] --> A["Adapter e modelli Qt"]
     A --> C["Controller Python"]
     C --> K["Servizi conoscenza e file"]
-    C --> T["Trasporto QProcess / RPC"]
-    T <--> P["Pi Agent locale"]
+    C --> T["QProcess / Bubblewrap / RPC"]
+    T <--> P["Pi Agent sandboxed"]
     P --> L["Ornith sul server LAN"]
     P <--> E["Estensione Pi sottile"]
     E <--> K
-    K --> D["File e metadati locali"]
+    K --> D["AIOS root: file e metadati locali"]
 ```
 
 Le frecce indicano comunicazione/responsabilità, non chiamate sincrone obbligatorie. Il canale estensione–Python va progettato in M2: non è una funzionalità del protocollo RPC standard da presumere esistente.
+
+Bubblewrap è parte del confine di sicurezza Linux: il suo mount namespace parte vuoto e riceve soltanto i mount dichiarati. La radice AIOS scelta dall'utente è l'unico albero dati personale montato read-write. Configurazione, sessioni e runtime Pi usati dall'app vivono in una sottocartella nascosta della stessa radice; directory di sistema necessarie a eseguire Node/Pi sono montate read-only. Il vero `$HOME`, `XDG_RUNTIME_DIR`, D-Bus, SSH/GPG agent e socket desktop non vengono esposti a Pi salvo futura necessità documentata e filtrata.
+
+La rete è un confine separato. La prima integrazione deve mantenere connettività verso Ornith sulla LAN e quindi può usare la rete host (`--unshare-all --share-net`). Questo protegge filesystem/processi ma non limita le destinazioni di rete: un eventuale requisito “solo endpoint inference” richiede una policy di egress separata e verificata.
 
 ## Struttura del codice prevista
 
@@ -34,7 +38,7 @@ Le frecce indicano comunicazione/responsabilità, non chiamate sincrone obbligat
 | `controllers/` | Coordinamento dei casi d'uso, senza duplicare servizi |
 | `ui/adapters/` | Slot/proprietà/signali focalizzati per chat, file e settings |
 | `ui/models/` | Modelli Qt per messaggi, strumenti, sessioni, risultati e albero file |
-| `ui/native/` | QProcess, dialoghi/piattaforma, apertura URL e shutdown Qt |
+| `ui/native/` | QProcess, Bubblewrap launcher, dialoghi/piattaforma, apertura URL e shutdown Qt |
 | `ui/qml/` | Theme.qml, componenti e schermate |
 | `ui/qml/shaders/` | Solo eventuali shader sorgente e relativa procedura di bake |
 | `integrations/pi/` | Estensione TypeScript minima, risorse e contratti Pi |
@@ -60,11 +64,11 @@ Non modificare direttamente una sessione attiva di Pi. Un eventuale catalogo dei
 
 ## Integrazione Pi
 
-Usare `pi --mode rpc` con stdin/stdout JSONL e QProcess asincrono. La documentazione verificata distingue risposte ai comandi ed eventi successivi. La GUI deve derivare il completamento dal lifecycle del turno e gestire separatamente rifiuto prima dell'accettazione e fallimento successivo. [RPC ufficiale](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/rpc.md)
+Usare `pi --mode rpc` con stdin/stdout JSONL e QProcess asincrono. Su Linux QProcess avvia Bubblewrap, che a sua volta esegue Pi come comando sandboxed; stdin/stdout/stderr restano i canali controllati dall'app. La documentazione verificata distingue risposte ai comandi ed eventi successivi. La GUI deve derivare il completamento dal lifecycle del turno e gestire separatamente rifiuto prima dell'accettazione e fallimento successivo. [RPC ufficiale](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/rpc.md)
 
 Il parser tratta byte/frame incrementali, limiti e record sconosciuti. Stato proposto: processo `stopped/starting/ready/stopping/failed`; turno `idle/running/cancelling/failed`, con richieste pendenti correlate per ID. Tenere distinti stato processo, attività del modello e stato del server per evitare booleani contraddittori.
 
-Un errore di connessione non autorizza a inviare nuovamente il prompt: prima si ricostruisce l'esito tramite stato/sessione. Shutdown: fermare nuovi job, gestire coda/abort e richieste UI pendenti, attendere asincronamente entro timeout, terminare/escalare i processi posseduti, verificare i figli e salvare stato. Non terminare il server LAN condiviso.
+Un errore di connessione non autorizza a inviare nuovamente il prompt: prima si ricostruisce l'esito tramite stato/sessione. Shutdown: fermare nuovi job, gestire coda/abort e richieste UI pendenti, attendere asincronamente entro timeout, terminare/escalare i processi posseduti, verificare i figli e salvare stato. Bubblewrap userà lifecycle esplicito (`--die-with-parent` e sessione separata quando appropriato), ma l'assenza di processi orfani va comunque provata sulla versione target. Non terminare il server LAN condiviso.
 
 La baseline sceglie API/provider; `models.json` è una configurazione Pi prodotta dal servizio settings, non un secondo editor concorrente dei medesimi valori. Non importare espressioni eseguibili per credenziali da file non fidati. Isolare configurazione dell'app senza sovrascrivere quella globale dell'utente. [Modelli Pi](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md)
 
@@ -72,7 +76,7 @@ Per gli strumenti di conoscenza, preferire un'estensione Pi che inoltra richiest
 
 ## Persistenza, concorrenza e recupero
 
-Configurazione e stato applicativo seguono XDG; la radice documentale è scelta dall'utente. Metadati di identità/provenienza sono dati canonici da includere nel backup. Cache estrazione/indice sono eliminabili e ricostruibili. Esportazione e backup devono includere le informazioni necessarie a mantenere citazioni e revisioni, non soltanto i file visibili.
+La radice AIOS è scelta dall'utente e contiene i dati persistenti dell'ambiente, inclusa una sottocartella interna riservata all'app per sessioni/config Pi quando serve al confinement Bubblewrap. Le impostazioni globali della GUI possono continuare a seguire XDG; nessun dato privato entra nella repository software. Metadati di identità/provenienza sono dati canonici da includere nel backup. Cache estrazione/indice sono eliminabili e ricostruibili. Esportazione e backup devono includere le informazioni necessarie a mantenere citazioni e revisioni, non soltanto i file visibili.
 
 Operazioni file con validazione path, hash atteso, snapshot precedente, scrittura atomica dove supportata e journal di recupero per operazioni che attraversano filesystem e database. Un rename su disco e una transazione SQLite non formano da soli una transazione atomica unica. Provare crash tra le fasi e riconciliazione al riavvio.
 
@@ -90,6 +94,10 @@ Scorciatoie previste: invio, nuova riga, stop, ricerca, apertura file e salvatag
 
 ## Accessi e trust
 
-Il workspace è una radice organizzativa, non una sandbox. Gli strumenti Pi e la shell hanno i diritti del processo; validare soltanto i path della GUI non li confina. Documenti importati sono dati non fidati e non devono installare estensioni o ridefinire automaticamente istruzioni operative.
+Il solo workspace selezionato dalla GUI non è una sandbox; il confinement nasce dal launcher Bubblewrap. Pi non deve vedere il vero home dell'utente, altre directory personali, socket D-Bus/desktop o agent di credenziali. Il profilo deve usare un root filesystem minimale: `/usr` e gli altri runtime strettamente necessari read-only, `/proc` e `/dev` controllati, `/tmp` temporaneo, ambiente ripulito e soltanto la radice AIOS read-write. Nessun `--bind /home /home` o equivalente.
+
+Tutti i processi figli creati da shell/tool/estensioni di Pi devono restare nello stesso namespace. Verificare esplicitamente tentativi di lettura/scrittura fuori dalla radice, symlink verso l'esterno, process discovery, accesso a socket host e shutdown. Non dichiarare la sandbox efficace finché questi test non sono verdi sul desktop target.
+
+Bubblewrap avverte che l'efficacia della sandbox dipende dai mount e dalle risorse esposte: in particolare socket D-Bus o altre capability host possono riaprire vie di esecuzione fuori sandbox. Per questo Pi, essendo headless, non riceve accesso alla sessione grafica. L'update manager di Pi resta fuori dal runtime sandbox normale e usa staging/rollback controllati invece di concedere a Pi permessi di scrittura sul sistema.
 
 La documentazione Pi prevede regole di trust anche per risorse locali e comportamento specifico in RPC. Caricare esplicitamente soltanto le risorse applicative previste e verificare il comportamento della versione fissata. Non abilitare globalmente ogni progetto per aggirare una mancata discovery. [Trust e contesto Pi](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/usage.md#project-trust)
