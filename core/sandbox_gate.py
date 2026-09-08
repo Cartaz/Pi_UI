@@ -19,7 +19,6 @@ from core.settings import AgentSettings
 
 _GATE_TIMEOUT_MS: Final = 10_000
 _RUN_ID_RE: Final = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-_SANDBOX_GATE_ROOT: Final = PurePosixPath("/workspace/.pi-agent")
 _EXPECTED_CHECKS: Final = (
     ("workspace-root", "Sandbox working directory"),
     ("workspace-write", "AIOS workspace is writable"),
@@ -185,12 +184,19 @@ class SandboxGateService:
         if not node_path.is_file() or not os.access(node_path, os.X_OK):
             raise SandboxGateError(f"Node executable is unavailable: {node_path}")
 
+        outside_base = outside_root.expanduser().resolve()
+        self._validate_outside_root(
+            outside_base,
+            workspace=workspace,
+            runtime_root=Path(settings.runtime_root).expanduser().resolve(),
+        )
+
         run_id = self._validated_run_id(self._id_factory())
         paths = PiRuntimePaths.for_workspace(workspace)
         agent_dir_created = not paths.host_agent_dir.exists()
         paths.host_agent_dir.mkdir(mode=0o700, exist_ok=True)
         scratch_dir = paths.host_agent_dir / f".m0-gate-{run_id}"
-        outside_run_dir = outside_root.expanduser().resolve() / f"m0-gate-{run_id}"
+        outside_run_dir = outside_base / f"m0-gate-{run_id}"
         outside_sentinel = outside_run_dir / "outside-sentinel.txt"
 
         try:
@@ -407,6 +413,26 @@ class SandboxGateService:
         if not isinstance(value, str) or not _RUN_ID_RE.fullmatch(value):
             raise SandboxGateError("gate id must be a short filesystem-safe token")
         return value
+
+    @staticmethod
+    def _validate_outside_root(
+        outside_root: Path,
+        *,
+        workspace: Path,
+        runtime_root: Path,
+    ) -> None:
+        for mounted_root, label in (
+            (workspace, "workspace"),
+            (runtime_root, "runtime_root"),
+            (Path("/usr"), "/usr"),
+        ):
+            try:
+                outside_root.relative_to(mounted_root)
+            except ValueError:
+                continue
+            raise SandboxGateError(
+                f"outside sentinel root must not be inside mounted {label}"
+            )
 
     @staticmethod
     def _cleanup_paths(
