@@ -120,12 +120,23 @@ def _build_sanitized_environment(
     sandbox_home: PurePosixPath,
     paths: PiRuntimePaths,
 ) -> dict[str, str]:
+    if settings.sandbox_enabled:
+        home = str(sandbox_home)
+        path = f"{settings.runtime_root}/bin:/usr/bin:/bin"
+        agent_dir = str(paths.sandbox_agent_dir)
+        session_dir = str(paths.sandbox_session_dir)
+    else:
+        home = base_environment.get("HOME", str(Path.home()))
+        path = base_environment.get("PATH", "/usr/bin:/bin")
+        agent_dir = str(paths.host_agent_dir)
+        session_dir = str(paths.host_session_dir)
+
     env = {
-        "HOME": str(sandbox_home),
-        "PATH": f"{settings.runtime_root}/bin:/usr/bin:/bin",
+        "HOME": home,
+        "PATH": path,
         "LANG": base_environment.get("LANG", "C.UTF-8"),
-        "PI_CODING_AGENT_DIR": str(paths.sandbox_agent_dir),
-        "PI_CODING_AGENT_SESSION_DIR": str(paths.sandbox_session_dir),
+        "PI_CODING_AGENT_DIR": agent_dir,
+        "PI_CODING_AGENT_SESSION_DIR": session_dir,
     }
 
     if settings.skip_version_check:
