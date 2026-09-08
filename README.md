@@ -6,9 +6,11 @@ Il prodotto ruota intorno a **un unico spazio di lavoro persistente**, con più 
 
 ## Stato reale
 
-M0 è **in corso**. La repository contiene ora la prima fondazione Python verificabile: settings tipizzati/atomici, framing JSONL per Pi RPC, contratto di trasporto indipendente da Qt, launch spec con configurazione/sessioni Pi isolate e test core con CI ospitata.
+M0 è **in corso**. La repository contiene ora la fondazione del runtime: settings tipizzati/atomici con migrazione di schema, framing JSONL Pi RPC, correlazione delle richieste, stato del turno, stop `clear_queue → abort`, launch spec Bubblewrap e trasporto PySide6 `QProcess` asincrono con stdout/stderr separati e shutdown temporizzato.
 
-**La GUI non è ancora implementata** e non sono ancora presenti QProcess, shell QML, collegamento LAN operativo o prova reale con Ornith. Nessuna parte di M0 che richiede la baseline locale viene dichiarata completata senza quella verifica. Vedi [stato M0](docs/M0_PROGRESS.md).
+Su Linux il percorso previsto è GUI → QProcess → Bubblewrap → Pi. La sandbox monta l'AIOS root come unico albero dati personale read-write, usa il runtime Pi read-only e non eredita automaticamente HOME reale, DISPLAY, SSH agent o altri socket desktop. La rete host resta condivisa perché Pi deve raggiungere Ornith in LAN e, quando necessario, Internet.
+
+**La GUI QML non è ancora implementata** e non è ancora stata eseguita dalla repository una prova reale Bubblewrap + Pi + Ornith sulla macchina target. Nessuna parte di M0 che richiede quella baseline locale viene dichiarata completata senza verifica. Vedi [stato M0](docs/M0_PROGRESS.md).
 
 ## Obiettivo
 
@@ -30,11 +32,12 @@ Le conoscenze vivono in file locali leggibili anche senza Pi_UI. La memoria non 
 
 ## Scelte di base
 
-- Python 3.12+, PySide6/Qt 6.11+, QApplication e QQmlApplicationEngine; le versioni Qt esatte restano da fissare e verificare in M0.
+- Python 3.12+, PySide6/Qt 6.11+, QApplication e QQmlApplicationEngine; il ramo M0 testa attualmente Python 3.12/3.13 e PySide6 6.11+ in CI.
 - QML nativo, dark neumorphism: superficie `#141414`, accento `#FF6600`, **Noto Sans**, raggi 28/22/16/12 px.
 - Pi eseguito localmente in background tramite RPC; inferenza Ornith 1.5 sul server LAN configurato dall'utente.
 - Una sola sessione agente attiva nella prima versione; molte conversazioni sullo stesso archivio.
-- Configurazione/sessioni Pi usate da Pi_UI isolate dall'installazione globale; aggiornamenti Pi espliciti e gestiti dall'app, non automatici all'avvio.
+- Pi è confinato con Bubblewrap sul target Linux; la sandbox è obbligatoria nel percorso di produzione e un lancio diretto resta soltanto una modalità esplicita per test/diagnostica, mai un fallback silenzioso.
+- Configurazione/sessioni Pi usate da Pi_UI sono isolate dall'installazione globale; aggiornamenti Pi espliciti e gestiti dall'app, non automatici all'avvio.
 - Test con modello reale esclusivamente nella LAN dell'utente; nessun runner GitHub self-hosted.
 - Documenti personali, credenziali e sessioni rimangono fuori dalla repository del software.
 
@@ -42,7 +45,7 @@ Ornith + Pi è una scelta già validata dall'utente nei propri test AIOS-bench; 
 
 ## Prossimo traguardo
 
-Completare la parte centrale di **M0**: fissare la baseline locale effettiva, generare la configurazione Pi derivata per il server LAN, implementare QProcess asincrono con correlazione richieste/stato turno/stop/shutdown e poi collegare una shell QML minima. Solo dopo le prove reali Pi–Ornith si passa alla GUI M1 estesa per chat e file.
+Completare la parte restante di **M0**: fissare la baseline locale effettiva, generare la configurazione Pi derivata per il server LAN, verificare il confinement Bubblewrap sulla macchina target, aggiungere i timeout di richiesta/inattività e collegare una shell QML minima a invio/streaming/stop reali. Solo dopo le prove Pi–Ornith si passa alla GUI M1 estesa per chat e file.
 
 ## Contribuire
 
