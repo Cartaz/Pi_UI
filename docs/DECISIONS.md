@@ -15,16 +15,21 @@ Stato delle decisioni distinto dall'implementazione: “adottata” stabilisce l
 | ADR-009 | Snapshot/hash per revisioni, niente Git obbligatorio nei dati | Revisioni comprensibili per documenti anche binari; richiede garanzie sui percorsi di scrittura agente | Proposta da verificare M1 |
 | ADR-010 | CI deterministica ospitata; LLM reale solo LAN | Rispetta la preferenza locale e separa verifica del software da qualità/compatibilità del modello | Adottata |
 | ADR-011 | Nessuna sandbox dichiarata implicitamente | Working directory e file picker non limitano shell e processi figli; enforcement di sistema da progettare se richiesto | Adottata |
-| ADR-012 | Inizializzazione documentale prima del codice | L'azione richiesta è fondare la repo e pianificare; nessun launcher fittizio, test vuoto o dipendenza non verificata | Completata in questo bootstrap |
+| ADR-012 | Inizializzazione documentale prima del codice | L'azione richiesta era fondare la repo e pianificare; nessun launcher fittizio, test vuoto o dipendenza non verificata nel bootstrap | Completata nel bootstrap |
+| ADR-013 | Pi_UI usa una directory Pi e una directory sessioni isolate | `PI_CODING_AGENT_DIR` e `PI_CODING_AGENT_SESSION_DIR` sono supportati upstream; evita di sovrascrivere configurazione e sessioni dell'installazione globale dell'utente | Adottata; launch spec implementata M0 |
+| ADR-014 | Aggiornamenti Pi espliciti e controllati dalla GUI, non automatici all'avvio | Pi espone update e package management, ma un cambio upstream può rompere RPC/trust/config; l'app disabilita il version check normale e introdurrà update con verifica compatibilità e rollback | Adottata; update manager da implementare |
+| ADR-015 | Personalizzazione Pi esposta dalla GUI tramite capacità upstream, senza forkare Pi | Estensioni, skill, prompt template e package sono già primitive native di Pi; la GUI deve gestirne stato/origine/versione e lasciare Python proprietario delle policy dell'app | Adottata; UI/runtime manager da implementare |
 
 ## Questioni aperte da risolvere quando diventano necessarie
 
 - M0: versione esatta Pi usata nel benchmark; versione Node compatibile; endpoint/provider/model ID, configurazione contesto/tool/reasoning e gestione credenziali locale.
-- M0: meccanismo supportato dalla versione fissata per isolare directory di configurazione/sessioni e autorizzare le sole risorse Pi dell'app.
+- M0: meccanismo supportato dalla versione fissata per isolare directory di configurazione/sessioni e autorizzare le sole risorse Pi dell'app. Il launch spec usa le variabili documentate upstream, ma trust e risorse vanno ancora provati con la versione fissata.
+- M0: formato finale della configurazione derivata `models.json`, inclusa autenticazione/no-auth del server llama.cpp e compatibilità OpenAI/Anthropic realmente usata dalla baseline.
+- M0/M1: UX e meccanismo dell'update manager: rilevamento versione, staging, test di compatibilità, attivazione e rollback senza toccare automaticamente l'installazione globale.
 - M1: snapshot di scritture da shell e strumenti non mediati, policy symlink e concorrenza tra editor/agente. Blocca la promessa di ripristino universale finché non provato.
 - M2: formati e dimensioni del corpus reale; extractor e licenze; canale IPC, limiti e cancellazione degli strumenti di conoscenza.
 - M3: quali informazioni possono aggiornarsi direttamente per istruzione dell'utente e quali richiedono una proposta; regole di conservazione della memoria.
 - M4: prima connessione e routine realmente utili; esecuzione soltanto con app aperta o servizio locale esplicito.
 - M5: licenza del progetto, formati di distribuzione e requisiti di isolamento effettivo.
 
-Queste questioni non bloccano la documentazione. Registrare la scelta e le evidenze nella milestone appropriata prima di costruire il comportamento dipendente.
+Queste questioni non bloccano la tranche core M0. Registrare la scelta e le evidenze nella milestone appropriata prima di costruire il comportamento dipendente.
