@@ -13,6 +13,8 @@ ApplicationWindow {
     required property var profileModel
     required property var preflightAdapter
     required property var preflightModel
+    required property var sandboxGateAdapter
+    required property var sandboxGateModel
 
     width: 1180
     height: 760
@@ -38,17 +40,20 @@ ApplicationWindow {
 
     Popup {
         id: preflightDialog
+        property int page: 0
+
         parent: Overlay.overlay
         x: Math.round((window.width - width) / 2)
         y: Math.round((window.height - height) / 2)
-        width: Math.min(760, window.width - 72)
-        height: Math.min(620, window.height - 72)
+        width: Math.min(780, window.width - 72)
+        height: Math.min(640, window.height - 72)
         modal: true
         focus: true
         padding: 22
         closePolicy: Popup.CloseOnEscape
 
         onOpened: {
+            page = 0
             if (!window.preflightAdapter.running)
                 window.preflightAdapter.runPreflight()
         }
@@ -72,7 +77,9 @@ ApplicationWindow {
                     spacing: 3
 
                     Text {
-                        text: "M0 preflight"
+                        text: preflightDialog.page === 0
+                            ? "M0 host preflight"
+                            : "M0 Bubblewrap gate"
                         color: Theme.textPrimary
                         font.family: Theme.fontFamily
                         font.pixelSize: 20
@@ -81,12 +88,20 @@ ApplicationWindow {
 
                     Text {
                         Layout.fillWidth: true
-                        text: window.preflightAdapter.operationError.length > 0
-                            ? window.preflightAdapter.operationError
-                            : window.preflightAdapter.statusText
-                        color: window.preflightAdapter.failCount > 0
-                            ? Theme.errorText
-                            : Theme.textSecondary
+                        text: preflightDialog.page === 0
+                            ? (window.preflightAdapter.operationError.length > 0
+                                ? window.preflightAdapter.operationError
+                                : window.preflightAdapter.statusText)
+                            : (window.sandboxGateAdapter.operationError.length > 0
+                                ? window.sandboxGateAdapter.operationError
+                                : window.sandboxGateAdapter.statusText)
+                        color: preflightDialog.page === 0
+                            ? (window.preflightAdapter.failCount > 0
+                                ? Theme.errorText
+                                : Theme.textSecondary)
+                            : (window.sandboxGateAdapter.failCount > 0
+                                ? Theme.errorText
+                                : Theme.textSecondary)
                         font.family: Theme.fontFamily
                         font.pixelSize: 12
                         wrapMode: Text.Wrap
@@ -94,12 +109,26 @@ ApplicationWindow {
                 }
 
                 NeuButton {
-                    text: window.preflightAdapter.running ? "Cancel" : "Run again"
+                    text: preflightDialog.page === 0
+                        ? (window.preflightAdapter.running ? "Cancel" : "Run again")
+                        : (window.sandboxGateAdapter.running ? "Cancel" : "Run gate")
+                    enabled: preflightDialog.page === 0
+                        || window.sandboxGateAdapter.running
+                        || window.sandboxGateAdapter.canRun
+                    accentText: preflightDialog.page === 1
+                        && !window.sandboxGateAdapter.running
                     onClicked: {
-                        if (window.preflightAdapter.running)
-                            window.preflightAdapter.cancelPreflight()
-                        else
-                            window.preflightAdapter.runPreflight()
+                        if (preflightDialog.page === 0) {
+                            if (window.preflightAdapter.running)
+                                window.preflightAdapter.cancelPreflight()
+                            else
+                                window.preflightAdapter.runPreflight()
+                        } else {
+                            if (window.sandboxGateAdapter.running)
+                                window.sandboxGateAdapter.cancelGate()
+                            else
+                                window.sandboxGateAdapter.runGate()
+                        }
                     }
                 }
 
@@ -111,23 +140,71 @@ ApplicationWindow {
 
             RowLayout {
                 Layout.fillWidth: true
+                spacing: 10
+
+                NeuButton {
+                    text: "Host checks"
+                    accentText: preflightDialog.page === 0
+                    onClicked: preflightDialog.page = 0
+                }
+
+                NeuButton {
+                    text: "Sandbox gate"
+                    accentText: preflightDialog.page === 1
+                    onClicked: preflightDialog.page = 1
+                }
+
+                Item { Layout.fillWidth: true }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                visible: preflightDialog.page === 1
+                text: "Explicit active test. Pi_UI creates temporary app-owned files inside the AIOS and one external sentinel, launches a controlled Node probe through the exact Bubblewrap mount policy used by Pi, then removes the fixtures. It does not contact Ornith or make a model request."
+                color: Theme.textMuted
+                font.family: Theme.fontFamily
+                font.pixelSize: 11
+                wrapMode: Text.Wrap
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
                 spacing: 16
 
                 Text {
+                    visible: preflightDialog.page === 0
                     text: "Blocking " + window.preflightAdapter.failCount
                     color: window.preflightAdapter.failCount > 0 ? Theme.errorText : Theme.textSecondary
                     font.family: Theme.fontFamily
                     font.pixelSize: 11
                 }
                 Text {
+                    visible: preflightDialog.page === 0
                     text: "Warnings " + window.preflightAdapter.warningCount
                     color: Theme.textSecondary
                     font.family: Theme.fontFamily
                     font.pixelSize: 11
                 }
                 Text {
+                    visible: preflightDialog.page === 0
                     text: "Pending target gate " + window.preflightAdapter.pendingCount
                     color: Theme.textMuted
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11
+                }
+                Text {
+                    visible: preflightDialog.page === 1
+                    text: "Passed " + window.sandboxGateAdapter.passCount
+                    color: Theme.textSecondary
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 11
+                }
+                Text {
+                    visible: preflightDialog.page === 1
+                    text: "Failed " + window.sandboxGateAdapter.failCount
+                    color: window.sandboxGateAdapter.failCount > 0
+                        ? Theme.errorText
+                        : Theme.textSecondary
                     font.family: Theme.fontFamily
                     font.pixelSize: 11
                 }
@@ -141,7 +218,9 @@ ApplicationWindow {
                 clip: true
                 reuseItems: true
                 spacing: 8
-                model: window.preflightModel
+                model: preflightDialog.page === 0
+                    ? window.preflightModel
+                    : window.sandboxGateModel
                 boundsBehavior: Flickable.StopAtBounds
                 ScrollBar.vertical: ScrollBar { }
 
@@ -217,8 +296,12 @@ ApplicationWindow {
 
             Text {
                 Layout.fillWidth: true
-                visible: window.preflightAdapter.sanitizedManifest.length > 0
-                text: "A sanitized shareable manifest is ready in the application state; the target confinement tests are still intentionally pending."
+                visible: preflightDialog.page === 0
+                    ? window.preflightAdapter.sanitizedManifest.length > 0
+                    : window.sandboxGateAdapter.sanitizedManifest.length > 0
+                text: preflightDialog.page === 0
+                    ? "A sanitized host manifest is ready. Static preflight alone never proves confinement."
+                    : "A sanitized confinement report is ready in application state. Local filesystem paths are not included."
                 color: Theme.textMuted
                 font.family: Theme.fontFamily
                 font.pixelSize: 10

@@ -18,11 +18,14 @@ Questo documento registra evidenze incrementali della milestone M0 senza dichiar
 ### Bubblewrap launch specification
 
 - AIOS root host montata come `/workspace`, unico albero personale read-write previsto.
-- Runtime `/opt/pi-agent` e `/usr` read-only; home/tmp sintetici, configurazione/sessioni Pi in `/workspace/.pi-agent`.
-- Rete host condivisa per mantenere la connettività LAN; questa scelta **non** limita le destinazioni di rete.
-- Ambiente child allow-list: HOME/PATH/locale, variabili Pi e soltanto l'eventuale variabile credenziale nominata nei settings. `DISPLAY`, `SSH_AUTH_SOCK` e ambiente desktop non vengono copiati implicitamente.
+- Runtime Pi dedicato e `/usr` read-only; home/tmp sintetici, configurazione/sessioni Pi in `/workspace/.pi-agent`.
+- HOME sintetica canonica `/home/aios`, non derivata da `$USER` o dalla HOME reale.
+- `runtime_root` troppo ampi o sovrapposti al workspace writable vengono rifiutati invece di ampliare implicitamente la superficie leggibile.
+- Rete host condivisa per mantenere la connettività LAN e gli strumenti internet; questa scelta **non** limita le destinazioni di rete.
+- Ambiente child allow-list: HOME/PATH/locale, variabili Pi e soltanto l'eventuale variabile credenziale nominata nei settings. `DISPLAY`, `WAYLAND_DISPLAY`, D-Bus, `SSH_AUTH_SOCK`, `GPG_AGENT_INFO` e `XDG_RUNTIME_DIR` non vengono copiati implicitamente.
 - Alias FHS `/bin`, `/sbin`, `/lib`, `/lib64` ricreati verso `/usr` quando necessari.
 - Nessun fallback automatico sandbox → host.
+- La policy mount è costruita da un unico modulo (`core/sandbox.py`) riusato sia dal launch Pi sia dal gate attivo, per evitare drift tra sandbox testata e sandbox realmente usata.
 
 Questa parte è verificata come costruzione deterministica dell'argv/ambiente. L'efficacia reale del namespace Bubblewrap resta da provare sulla macchina target.
 
@@ -40,23 +43,55 @@ Questa parte è verificata come costruzione deterministica dell'argv/ambiente. L
 
 - Entry point `pi-ui` con `QApplication` + `QQmlApplicationEngine` e wiring soltanto in `main.py`.
 - Controller Python presentation-independent.
-- `AgentAdapter` focalizzato e due `QAbstractListModel` per profili e transcript.
+- `AgentAdapter` focalizzato e `QAbstractListModel` per profili e transcript.
 - QML dark-neumorphic con Theme, RaisedSurface, InsetSurface e NeuButton centralizzati.
 - Workspace/profile selection, connect/disconnect, cronologia via RPC, transcript virtualizzato, composer, send e stop collegati a operazioni reali.
 - Dipendenze backend QML dichiarate come proprietà `required` e inizializzate con `setInitialProperties()`.
 
+### Preflight host integrato
+
+- `PreflightPlanner` read-only: classifica OS, workspace, policy sandbox, Bubblewrap, Pi, runtime root, Node e `models.json` senza modificare il workspace.
+- Le versioni Pi/Bubblewrap/Node vengono sondate sequenzialmente con `QProcess`, senza shell, ambiente ridotto, timeout per probe e stdout/stderr separati.
+- Node non è considerato valido solo perché eseguibile sull'host: con sandbox attiva deve trovarsi in un albero realmente montato (`/usr` o `runtime_root`).
+- Controller, adapter e model diagnostici separati da `AgentController`.
+- Cancellazione protetta sia nel runner sia tramite generation token: callback tardivi non possono trasformare una run cancellata in una run completata.
+- Manifest diagnostico sanitizzato con redazione dei path locali.
+- Pagina `Host checks` nel pannello M0 Preflight della GUI.
+
+### Gate attivo Bubblewrap
+
+Il ramo M0 target-gate introduce un secondo workflow esplicito, separato dal preflight statico. Usa lo stesso builder Bubblewrap del launch Pi e un payload Node controllato, senza contattare Ornith.
+
+Il gate prepara soltanto fixture temporanee app-owned e verifica:
+
+- working directory `/workspace`;
+- round-trip di scrittura nella AIOS root;
+- impossibilità di leggere un sentinel esterno direttamente;
+- impossibilità di raggiungerlo tramite symlink dal workspace;
+- ereditarietà del confinement da parte di un child process Node;
+- `runtime_root` read-only;
+- `/usr` read-only;
+- HOME sintetica `/home/aios` realmente presente;
+- assenza delle variabili desktop/sessione proibite;
+- assenza di `/run/user` dal namespace;
+- invisibilità del PID della GUI host nel `/proc` del sandbox.
+
+Il parser del report è fail-closed: schema/check mancanti, duplicati o ambigui non producono un PASS. Fixture interne ed esterne vengono rimosse su successo, errore e cancellazione. Il manifest condivisibile omette i detail raw potenzialmente contenenti path locali.
+
+**Importante:** i test CI verificano planner, argv, parser, lifecycle e QML con dati sintetici. Solo l'esecuzione sul CachyOS dell'utente può costituire evidenza del confinement reale.
+
 ## Evidenze CI osservate
 
-Il gate ospitato GitHub attuale esegue, su Python 3.12 e 3.13:
+Il gate ospitato GitHub esegue, su Python 3.12 e 3.13:
 
 1. installazione PySide6 6.11.x e dipendenze test;
 2. `python -m compileall -q controllers core ui tests main.py`;
 3. `pyside6-qmllint --max-warnings 0 -I ui/qml ui/qml/PiUI/*.qml`;
 4. `python -m pytest` con `QT_QPA_PLATFORM=offscreen`.
 
-Sul head della PR M0 timeout/lifecycle questi quattro step sono stati osservati verdi su entrambe le versioni Python. La suite include un vero subprocess RPC sintetico, caricamento QML offscreen, scheduler Qt, timeout RPC/inattività, configurazione corrotta e un subprocess che installa un handler SIGTERM, segnala readiness, ignora `terminate()` e viene poi chiuso tramite l'escalation temporizzata del transport.
+PR precedenti M0 hanno osservato questi step verdi su entrambe le versioni Python. La suite include subprocess RPC sintetico, caricamento QML offscreen, scheduler Qt, timeout RPC/inattività, configurazione corrotta, escalation terminate→kill, preflight QProcess e test deterministici della policy/gate Bubblewrap.
 
-Queste sono prove su runner ospitato e dati sintetici. **Non sono** prove della configurazione privata dell'utente o del confinement Bubblewrap reale.
+Il head della PR target-gate deve essere nuovamente verde dopo ogni hardening prima del merge. Queste restano prove su runner ospitato e dati sintetici, **non** prove della configurazione privata dell'utente o del confinement Bubblewrap reale.
 
 ## Contratti upstream usati
 
@@ -84,7 +119,7 @@ Questi link seguono il ramo upstream corrente. M0 deve ancora fissare e provare 
 
 ### Bubblewrap
 
-Bubblewrap costruisce un mount namespace la cui esposizione dipende dagli argomenti dichiarati. Pi_UI usa questo meccanismo per progettare il confine filesystem, non la sola convenzione del workspace. La rete è un confine distinto: `--share-net` mantiene la LAN ma non applica egress filtering.
+Bubblewrap costruisce un mount namespace la cui esposizione dipende dagli argomenti dichiarati. Pi_UI usa questo meccanismo per progettare il confine filesystem, non la sola convenzione del workspace. La rete è un confine distinto: `--share-net` mantiene la LAN/internet ma non applica egress filtering.
 
 Riferimenti:
 
@@ -102,20 +137,19 @@ Riferimenti:
 
 ## Lavoro M0 ancora aperto
 
-### Può essere preparato senza la macchina target
-
-- Preflight/diagnostica applicativa che raccolga in modo non mutante versioni/runtime/path e produca un manifest sanitizzato.
-- UI del preflight e report locale per rendere il test target un singolo workflow guidato.
-- Checklist automatizzata dei tentativi di accesso che Pi dovrà eseguire dentro Bubblewrap.
-- Verifica/aggiornamento della documentazione di installazione e troubleshooting sulla base del preflight.
-
 ### Richiede la macchina/rete dell'utente
 
+- Eseguire dalla GUI `Host checks` sul CachyOS reale e conservare il manifest sanitizzato.
+- Eseguire dalla GUI `Sandbox gate` e verificare tutti i check del namespace sulla macchina target.
 - Inventario reale: Pi package/versione, Node, build llama.cpp, model ID, quantizzazione, template, tool/reasoning, context window e parametri della baseline.
 - Pin della versione Pi/Node effettivamente compatibile.
 - Conferma del provider/API/model ID/capabilities contro Ornith reale.
-- Prove Bubblewrap su CachyOS: accesso fuori `/workspace`, symlink verso l'esterno, HOME reale, socket desktop, process discovery, shell/tool figli e shutdown/orfani.
 - Tre sessioni Pi–Ornith consecutive, streaming, stop, resume sessione, tool di lettura/modifica file, errore server e riavvio.
+- Verifica dei processi shell/tool figli e assenza di processi posseduti orfani dopo shutdown.
 - Verifica grafica reale su KDE/Wayland e GPU target.
 
-M0 resta quindi **in corso**. Il prossimo obiettivo prima dell'intervento dell'utente è costruire il preflight/diagnostica e la procedura di gate locale.
+### Residuo preparabile senza il target
+
+Dopo il merge del gate attivo non restano altri blocchi M0 ad alto valore che possano sostituire in modo affidabile la prova sulla macchina target. Ulteriore simulazione aumenterebbe soprattutto duplicazione del test harness; il prossimo passo corretto è raccogliere evidenza reale e usare gli eventuali failure per guidare gli ultimi fix M0.
+
+M0 resta quindi **in corso** fino al gate CachyOS + Pi → Ornith LAN.

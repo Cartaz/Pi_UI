@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Mapping
 
+from core.sandbox import SANDBOX_HOME, build_bubblewrap_arguments
 from core.settings import AgentSettings
 
 SANDBOX_WORKSPACE = PurePosixPath("/workspace")
@@ -66,7 +67,6 @@ def build_launch_spec(
     working_directory: Path,
     paths: PiRuntimePaths | None = None,
     base_environment: Mapping[str, str] | None = None,
-    user_name: str | None = None,
 ) -> PiLaunchSpec:
     """Create argv/environment for Pi RPC without invoking a shell.
 
@@ -78,13 +78,10 @@ def build_launch_spec(
 
     runtime_paths = paths or PiRuntimePaths.for_workspace(working_directory)
     base_env = dict(os.environ if base_environment is None else base_environment)
-    fake_user = user_name or base_env.get("USER") or "aios"
-    sandbox_home = PurePosixPath("/home") / fake_user
 
     environment = _build_sanitized_environment(
         settings,
         base_environment=base_env,
-        sandbox_home=sandbox_home,
         paths=runtime_paths,
     )
     pi_arguments = _build_pi_arguments(settings, runtime_paths)
@@ -98,15 +95,16 @@ def build_launch_spec(
             paths=runtime_paths,
         )
 
-    arguments = _build_bubblewrap_arguments(
+    executable = _validated_sandbox_pi_executable(settings)
+    arguments = build_bubblewrap_arguments(
         settings,
-        paths=runtime_paths,
-        sandbox_home=sandbox_home,
-        pi_arguments=pi_arguments,
+        host_workspace=runtime_paths.host_workspace,
+        sandbox_workspace=runtime_paths.sandbox_workspace,
+        command=(str(executable), *pi_arguments),
     )
     return PiLaunchSpec(
         executable=settings.bubblewrap_executable,
-        arguments=tuple(arguments),
+        arguments=arguments,
         environment=environment,
         working_directory=runtime_paths.host_workspace,
         paths=runtime_paths,
@@ -117,11 +115,10 @@ def _build_sanitized_environment(
     settings: AgentSettings,
     *,
     base_environment: Mapping[str, str],
-    sandbox_home: PurePosixPath,
     paths: PiRuntimePaths,
 ) -> dict[str, str]:
     if settings.sandbox_enabled:
-        home = str(sandbox_home)
+        home = str(SANDBOX_HOME)
         path = f"{settings.runtime_root}/bin:/usr/bin:/bin"
         agent_dir = str(paths.sandbox_agent_dir)
         session_dir = str(paths.sandbox_session_dir)
@@ -171,13 +168,7 @@ def _build_pi_arguments(
     return arguments
 
 
-def _build_bubblewrap_arguments(
-    settings: AgentSettings,
-    *,
-    paths: PiRuntimePaths,
-    sandbox_home: PurePosixPath,
-    pi_arguments: list[str],
-) -> list[str]:
+def _validated_sandbox_pi_executable(settings: AgentSettings) -> PurePosixPath:
     runtime_root = PurePosixPath(settings.runtime_root)
     executable = PurePosixPath(settings.executable)
     if not runtime_root.is_absolute() or not executable.is_absolute():
@@ -190,63 +181,4 @@ def _build_bubblewrap_arguments(
         raise RuntimeConfigurationError(
             "sandboxed Pi executable must live inside runtime_root"
         ) from exc
-
-    return [
-        "--unshare-all",
-        "--share-net",
-        "--die-with-parent",
-        "--new-session",
-        "--ro-bind",
-        "/usr",
-        "/usr",
-        "--symlink",
-        "usr/bin",
-        "/bin",
-        "--symlink",
-        "usr/sbin",
-        "/sbin",
-        "--symlink",
-        "usr/lib",
-        "/lib",
-        "--symlink",
-        "usr/lib64",
-        "/lib64",
-        "--ro-bind",
-        str(runtime_root),
-        str(runtime_root),
-        "--proc",
-        "/proc",
-        "--dev",
-        "/dev",
-        "--tmpfs",
-        "/tmp",
-        "--tmpfs",
-        "/home",
-        "--dir",
-        str(sandbox_home),
-        "--dir",
-        "/etc",
-        "--ro-bind-try",
-        "/etc/resolv.conf",
-        "/etc/resolv.conf",
-        "--ro-bind-try",
-        "/etc/hosts",
-        "/etc/hosts",
-        "--ro-bind-try",
-        "/etc/nsswitch.conf",
-        "/etc/nsswitch.conf",
-        "--ro-bind-try",
-        "/etc/ssl/certs",
-        "/etc/ssl/certs",
-        "--ro-bind-try",
-        "/etc/ca-certificates",
-        "/etc/ca-certificates",
-        "--bind",
-        str(paths.host_workspace),
-        str(paths.sandbox_workspace),
-        "--chdir",
-        str(paths.sandbox_workspace),
-        "--",
-        str(executable),
-        *pi_arguments,
-    ]
+    return executable

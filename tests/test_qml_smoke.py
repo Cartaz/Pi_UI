@@ -10,10 +10,11 @@ from PySide6.QtWidgets import QApplication
 
 from controllers.agent_controller import AgentController
 from controllers.preflight_controller import PreflightController
+from controllers.sandbox_gate_controller import SandboxGateController
 from core.agent.runtime import PiLaunchSpec
 from core.preflight import HostRuntimeFacts
 from core.settings import AppSettings, SettingsStore
-from ui.adapters import AgentAdapter, PreflightAdapter
+from ui.adapters import AgentAdapter, PreflightAdapter, SandboxGateAdapter
 from ui.models import AgentProfileListModel, MessageListModel, PreflightListModel
 
 
@@ -33,7 +34,7 @@ def _unexpected_transport(
 
 
 def _unexpected_probe_runner():
-    raise AssertionError("QML smoke test must not start preflight probes")
+    raise AssertionError("QML smoke test must not start preflight or sandbox probes")
 
 
 def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) -> None:
@@ -43,23 +44,32 @@ def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) ->
         _unexpected_transport,
         settings=AppSettings(),
     )
+    facts = HostRuntimeFacts(
+        os_name="Linux",
+        os_release="test-kernel",
+        python_version="3.13.0",
+        pyside_version="6.11.2",
+        qt_version="6.11.2",
+        node_executable=None,
+    )
     preflight_controller = PreflightController(
         controller,
         _unexpected_probe_runner,
-        HostRuntimeFacts(
-            os_name="Linux",
-            os_release="test-kernel",
-            python_version="3.13.0",
-            pyside_version="6.11.2",
-            qt_version="6.11.2",
-            node_executable=None,
-        ),
+        facts,
+    )
+    sandbox_gate_controller = SandboxGateController(
+        controller,
+        _unexpected_probe_runner,
+        facts,
+        outside_root=tmp_path / "outside",
     )
     message_model = MessageListModel(controller)
     profile_model = AgentProfileListModel(controller)
     preflight_model = PreflightListModel(preflight_controller)
+    sandbox_gate_model = PreflightListModel(sandbox_gate_controller)
     adapter = AgentAdapter(controller)
     preflight_adapter = PreflightAdapter(preflight_controller)
+    sandbox_gate_adapter = SandboxGateAdapter(sandbox_gate_controller)
 
     engine = QQmlApplicationEngine()
     qml_root = Path(__file__).resolve().parents[1] / "ui" / "qml"
@@ -71,6 +81,8 @@ def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) ->
             "profileModel": profile_model,
             "preflightAdapter": preflight_adapter,
             "preflightModel": preflight_model,
+            "sandboxGateAdapter": sandbox_gate_adapter,
+            "sandboxGateModel": sandbox_gate_model,
         }
     )
     warnings: list[str] = []
@@ -88,10 +100,14 @@ def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) ->
     assert root.property("agentAdapter") is not None
     assert root.property("preflightAdapter") is not None
     assert root.property("preflightModel") is not None
+    assert root.property("sandboxGateAdapter") is not None
+    assert root.property("sandboxGateModel") is not None
     assert preflight_controller.status_text == "Preflight not run"
+    assert sandbox_gate_controller.status_text == "Sandbox gate not run"
     assert not warnings, "QML warnings:\n" + "\n".join(warnings)
 
     root.setProperty("visible", False)
+    sandbox_gate_controller.cancel()
     preflight_controller.cancel()
     controller.shutdown()
     engine.deleteLater()

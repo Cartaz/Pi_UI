@@ -10,6 +10,11 @@ from pathlib import Path
 from typing import Final
 
 from core.agent.model_discovery import ExistingModelsConfig, ModelConfigManagementState
+from core.sandbox import (
+    SandboxConfigurationError,
+    command_is_visible_in_sandbox,
+    validate_sandbox_paths,
+)
 from core.settings import AgentSettings
 
 _MAX_PROBE_TEXT: Final = 1000
@@ -100,6 +105,7 @@ class PreflightPlanner:
             )
         )
 
+        resolved_workspace: Path | None = None
         if workspace is None:
             checks.append(
                 PreflightCheck(
@@ -110,14 +116,16 @@ class PreflightPlanner:
                 )
             )
         else:
-            resolved = workspace.expanduser().resolve()
+            resolved_workspace = workspace.expanduser().resolve()
             checks.append(
                 PreflightCheck(
                     "workspace",
                     "AIOS workspace",
-                    PreflightStatus.PASS if resolved.is_dir() else PreflightStatus.FAIL,
-                    "Workspace directory is available" if resolved.is_dir() else "Workspace directory is unavailable",
-                    str(resolved),
+                    PreflightStatus.PASS if resolved_workspace.is_dir() else PreflightStatus.FAIL,
+                    "Workspace directory is available"
+                    if resolved_workspace.is_dir()
+                    else "Workspace directory is unavailable",
+                    str(resolved_workspace),
                 )
             )
 
@@ -152,35 +160,85 @@ class PreflightPlanner:
 
         runtime_root = Path(settings.runtime_root)
         runtime_ok = runtime_root.is_dir()
+        sandbox_policy_error: str | None = None
+        if (
+            runtime_ok
+            and settings.sandbox_enabled
+            and resolved_workspace is not None
+            and resolved_workspace.is_dir()
+        ):
+            try:
+                validate_sandbox_paths(
+                    settings,
+                    host_workspace=resolved_workspace,
+                )
+            except SandboxConfigurationError as exc:
+                sandbox_policy_error = str(exc)
+
+        if not runtime_ok:
+            runtime_status = PreflightStatus.FAIL
+            runtime_summary = "Runtime root is missing"
+            runtime_detail = str(runtime_root)
+        elif sandbox_policy_error is not None:
+            runtime_status = PreflightStatus.FAIL
+            runtime_summary = "Runtime root violates sandbox policy"
+            runtime_detail = f"{runtime_root}: {sandbox_policy_error}"
+        else:
+            runtime_status = PreflightStatus.PASS
+            runtime_summary = "Runtime root is available"
+            runtime_detail = str(runtime_root)
+
         checks.append(
             PreflightCheck(
                 "runtime-root",
                 "Managed Pi runtime root",
-                PreflightStatus.PASS if runtime_ok else PreflightStatus.FAIL,
-                "Runtime root is available" if runtime_ok else "Runtime root is missing",
-                str(runtime_root),
+                runtime_status,
+                runtime_summary,
+                runtime_detail,
             )
         )
 
         if facts.node_executable:
             node_path = Path(facts.node_executable)
             node_ok = node_path.is_file() and os.access(node_path, os.X_OK)
-            checks.append(
-                PreflightCheck(
-                    "node",
-                    "Node.js runtime",
-                    PreflightStatus.PENDING if node_ok else PreflightStatus.FAIL,
-                    "Version probe pending" if node_ok else "Node executable is unavailable",
+            sandbox_visible = (
+                not settings.sandbox_enabled
+                or command_is_visible_in_sandbox(
                     str(node_path),
+                    runtime_root=settings.runtime_root,
                 )
             )
-            if node_ok:
+            if node_ok and sandbox_visible:
+                checks.append(
+                    PreflightCheck(
+                        "node",
+                        "Node.js runtime",
+                        PreflightStatus.PENDING,
+                        "Version probe pending",
+                        str(node_path),
+                    )
+                )
                 probes.append(
                     CommandProbe(
                         probe_id="node",
                         label="Node.js runtime",
                         executable=str(node_path),
                         arguments=("--version",),
+                    )
+                )
+            else:
+                summary = (
+                    "Node executable is unavailable"
+                    if not node_ok
+                    else "Node exists on the host but is not mounted into the sandbox"
+                )
+                checks.append(
+                    PreflightCheck(
+                        "node",
+                        "Node.js runtime",
+                        PreflightStatus.FAIL,
+                        summary,
+                        str(node_path),
                     )
                 )
         else:
