@@ -1,10 +1,13 @@
 """Pi Agent protocol, state and transport abstractions."""
 
 from .bootstrap import (
+    ExistingRuntimeChangedError,
+    ExistingRuntimeProfileError,
     MissingRuntimeCredentialError,
     PiRuntimeBootstrap,
     PiRuntimeBootstrapError,
     PreparedPiRuntime,
+    RuntimeModelConfigSource,
 )
 from .client import AgentClient, AgentClientError, TurnState
 from .model_config import (
@@ -41,6 +44,8 @@ __all__ = [
     "DiscoveredModelProfile",
     "ExistingAuthKind",
     "ExistingModelsConfig",
+    "ExistingRuntimeChangedError",
+    "ExistingRuntimeProfileError",
     "JsonlDecoder",
     "JsonlProtocolError",
     "LOCAL_AUTH_PLACEHOLDER",
@@ -60,6 +65,7 @@ __all__ = [
     "PiRuntimeBootstrapError",
     "PiRuntimePaths",
     "PreparedPiRuntime",
+    "RuntimeModelConfigSource",
     "RuntimeConfigurationError",
     "TransportState",
     "TurnState",
