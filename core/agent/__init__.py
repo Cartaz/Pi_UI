@@ -3,9 +3,12 @@
 from .client import AgentClient, AgentClientError, TurnState
 from .model_config import (
     LOCAL_AUTH_PLACEHOLDER,
+    MANAGED_MARKER_FILENAME,
     ModelConfigError,
+    ModelsConfigChangedExternallyError,
     ModelsConfigWriteResult,
     PiModelsConfigManager,
+    UnmanagedModelsConfigError,
 )
 from .protocol import JsonlDecoder, JsonlProtocolError, encode_command
 from .runtime import (
@@ -24,7 +27,9 @@ __all__ = [
     "JsonlDecoder",
     "JsonlProtocolError",
     "LOCAL_AUTH_PLACEHOLDER",
+    "MANAGED_MARKER_FILENAME",
     "ModelConfigError",
+    "ModelsConfigChangedExternallyError",
     "ModelsConfigWriteResult",
     "PiLaunchSpec",
     "PiModelsConfigManager",
@@ -32,6 +37,7 @@ __all__ = [
     "RuntimeConfigurationError",
     "TransportState",
     "TurnState",
+    "UnmanagedModelsConfigError",
     "build_launch_spec",
     "encode_command",
     "prepare_runtime_paths",
