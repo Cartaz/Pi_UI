@@ -5,15 +5,24 @@ from __future__ import annotations
 import json
 import os
 import re
-import tempfile
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Final
 from urllib.parse import urlsplit
 
+from core.atomic_file import atomic_write_text, fsync_directory
+
 APP_DIR_NAME: Final = "pi-ui"
-CURRENT_SCHEMA_VERSION: Final = 2
+CURRENT_SCHEMA_VERSION: Final = 3
+SUPPORTED_MODEL_APIS: Final = frozenset(
+    {
+        "openai-completions",
+        "openai-responses",
+        "anthropic-messages",
+        "google-generative-ai",
+    }
+)
 _ENV_NAME_RE: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -35,10 +44,13 @@ class SettingsRecovery:
 
 @dataclass(frozen=True, slots=True)
 class AgentSettings:
-    """Pi runtime configuration owned by Pi_UI.
+    """Pi runtime and model configuration owned by Pi_UI.
 
     Secrets are deliberately not stored here. ``api_key_env`` names an
     environment variable copied into the sanitized Pi process environment.
+    Model capabilities use ``None`` when the baseline has not been verified;
+    the derived Pi config then omits the corresponding field instead of
+    inventing a capability.
     """
 
     executable: str = "/opt/pi-agent/bin/pi"
@@ -49,9 +61,14 @@ class AgentSettings:
     model: str | None = None
     base_url: str | None = None
     api: str = "openai-completions"
+    auth_mode: str = "none"
     api_key_env: str | None = None
     context_window: int | None = None
     max_tokens: int | None = None
+    model_reasoning: bool | None = None
+    model_supports_images: bool | None = None
+    supports_developer_role: bool | None = None
+    supports_reasoning_effort: bool | None = None
     thinking_level: str | None = None
     skip_version_check: bool = True
     offline_startup: bool = False
@@ -127,33 +144,14 @@ class SettingsStore:
             sort_keys=True,
             allow_nan=False,
         ) + "\n"
-
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temp_name = tempfile.mkstemp(
-            prefix=f".{self.path.name}.",
-            suffix=".tmp",
-            dir=self.path.parent,
-            text=True,
-        )
-        temp_path = Path(temp_name)
-
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temp_path, self.path)
-            _fsync_directory(self.path.parent)
-        except BaseException:
-            temp_path.unlink(missing_ok=True)
-            raise
+        atomic_write_text(self.path, payload)
 
     def _quarantine_invalid_file(self) -> Path:
         suffix = f".invalid-{time.time_ns()}"
         quarantined = self.path.with_name(self.path.name + suffix)
         try:
             os.replace(self.path, quarantined)
-            _fsync_directory(self.path.parent)
+            fsync_directory(self.path.parent)
         except OSError as exc:
             raise SettingsError(
                 f"settings are invalid and could not be preserved: {self.path}"
@@ -168,7 +166,7 @@ def _migrate_settings(raw: Any) -> dict[str, Any]:
     version = raw.get("schema_version", 1)
     if version == CURRENT_SCHEMA_VERSION:
         return dict(raw)
-    if version != 1:
+    if version not in {1, 2}:
         raise SettingsValidationError(
             f"unsupported settings schema version: {version!r}"
         )
@@ -179,11 +177,12 @@ def _migrate_settings(raw: Any) -> dict[str, Any]:
         raise SettingsValidationError("agent settings must be a JSON object")
     agent = dict(agent_raw)
 
-    # Schema 1 pre-dated the Bubblewrap runtime and commonly stored bare `pi`.
-    # Pi_UI now owns a fixed runtime under /opt/pi-agent; preserve any explicit
-    # absolute executable while migrating the old default to the managed path.
-    if agent.get("executable", "pi") == "pi":
+    if version == 1 and agent.get("executable", "pi") == "pi":
         agent["executable"] = AgentSettings().executable
+
+    # Schema 3 makes server authentication explicit. Existing configurations
+    # that already named an API-key environment variable preserve that intent.
+    agent.setdefault("auth_mode", "env" if agent.get("api_key_env") else "none")
 
     migrated["agent"] = agent
     migrated["schema_version"] = CURRENT_SCHEMA_VERSION
@@ -243,12 +242,21 @@ def _parse_agent_settings(raw: dict[str, Any]) -> AgentSettings:
     for key in ("provider", "model", "base_url", "api_key_env", "thinking_level"):
         _optional_non_empty_string(values, key)
 
+    if values["api"] not in SUPPORTED_MODEL_APIS:
+        raise SettingsValidationError(f"unsupported Pi model API: {values['api']}")
+    if values["auth_mode"] not in {"none", "env"}:
+        raise SettingsValidationError("auth_mode must be 'none' or 'env'")
+
     if values["base_url"] is not None:
         _validate_base_url(values["base_url"])
     if values["api_key_env"] is not None and not _ENV_NAME_RE.fullmatch(
         values["api_key_env"]
     ):
         raise SettingsValidationError("api_key_env must be an environment variable name")
+    if values["auth_mode"] == "env" and values["api_key_env"] is None:
+        raise SettingsValidationError(
+            "api_key_env is required when auth_mode is 'env'"
+        )
 
     for key in ("context_window", "max_tokens"):
         value = values[key]
@@ -265,6 +273,16 @@ def _parse_agent_settings(raw: dict[str, Any]) -> AgentSettings:
     for key in ("sandbox_enabled", "skip_version_check", "offline_startup"):
         if not isinstance(values[key], bool):
             raise SettingsValidationError(f"{key} must be a boolean")
+
+    for key in (
+        "model_reasoning",
+        "model_supports_images",
+        "supports_developer_role",
+        "supports_reasoning_effort",
+    ):
+        value = values[key]
+        if value is not None and not isinstance(value, bool):
+            raise SettingsValidationError(f"{key} must be a boolean or null")
 
     if values["sandbox_enabled"]:
         executable = PurePosixPath(values["executable"])
@@ -306,18 +324,3 @@ def _optional_non_empty_string(values: dict[str, Any], key: str) -> None:
     value = values[key]
     if value is not None and (not isinstance(value, str) or not value.strip()):
         raise SettingsValidationError(f"{key} must be a non-empty string or null")
-
-
-def _fsync_directory(path: Path) -> None:
-    """Best-effort directory fsync on POSIX after atomic replacement."""
-
-    if os.name != "posix":
-        return
-    flags = os.O_RDONLY
-    if hasattr(os, "O_DIRECTORY"):
-        flags |= os.O_DIRECTORY
-    directory_fd = os.open(path, flags)
-    try:
-        os.fsync(directory_fd)
-    finally:
-        os.close(directory_fd)
