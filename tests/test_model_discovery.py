@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -17,6 +18,7 @@ def test_missing_models_file_is_reported_without_creating_state(tmp_path: Path) 
     paths = PiRuntimePaths.for_workspace(tmp_path)
     result = PiModelsConfigDiscovery().inspect(paths)
 
+    assert result.sha256 is None
     assert result.management_state == ModelConfigManagementState.MISSING
     assert result.profiles == ()
     assert not (tmp_path / ".pi-agent").exists()
@@ -55,13 +57,12 @@ def test_unmanaged_existing_baseline_is_parsed_without_returning_secret(
             }
         }
     }
-    (paths.host_agent_dir / "models.json").write_text(
-        json.dumps(payload),
-        encoding="utf-8",
-    )
+    raw = json.dumps(payload)
+    (paths.host_agent_dir / "models.json").write_text(raw, encoding="utf-8")
 
     result = PiModelsConfigDiscovery().inspect(paths)
 
+    assert result.sha256 == hashlib.sha256(raw.encode("utf-8")).hexdigest()
     assert result.management_state == ModelConfigManagementState.UNMANAGED
     assert len(result.profiles) == 2
     first, second = result.profiles
@@ -107,6 +108,7 @@ def test_literal_api_key_is_classified_but_never_returned(tmp_path: Path) -> Non
     result = PiModelsConfigDiscovery().inspect(paths)
     profile = result.profiles[0]
 
+    assert result.sha256 is not None
     assert profile.auth_kind == ExistingAuthKind.OTHER
     assert profile.api_key_env is None
     assert secret not in repr(result)
@@ -127,11 +129,12 @@ def test_pi_ui_managed_file_is_recognized_and_external_change_is_detected(
     )
 
     discovery = PiModelsConfigDiscovery()
-    assert discovery.inspect(paths).management_state == ModelConfigManagementState.MANAGED
+    first = discovery.inspect(paths)
+    assert first.sha256 is not None
+    assert first.management_state == ModelConfigManagementState.MANAGED
 
     target = paths.host_agent_dir / "models.json"
     target.write_text('{"changed":true}\n', encoding="utf-8")
-    assert (
-        discovery.inspect(paths).management_state
-        == ModelConfigManagementState.CHANGED_EXTERNALLY
-    )
+    changed = discovery.inspect(paths)
+    assert changed.sha256 != first.sha256
+    assert changed.management_state == ModelConfigManagementState.CHANGED_EXTERNALLY
