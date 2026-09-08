@@ -8,8 +8,18 @@ from pathlib import Path
 from typing import Protocol
 
 from controllers.agent_controller import AgentController, ConnectionState
-from core.preflight import CommandProbe, CommandProbeResult, HostRuntimeFacts, PreflightCheck, PreflightStatus
-from core.sandbox import command_is_visible_in_sandbox
+from core.preflight import (
+    CommandProbe,
+    CommandProbeResult,
+    HostRuntimeFacts,
+    PreflightCheck,
+    PreflightStatus,
+)
+from core.sandbox import (
+    SandboxConfigurationError,
+    command_is_visible_in_sandbox,
+    validate_sandbox_paths,
+)
 from core.sandbox_gate import SandboxGatePlan, SandboxGateService
 from core.settings import default_state_dir
 
@@ -100,6 +110,16 @@ class SandboxGateController:
         node_executable = self._facts.node_executable
         bwrap = Path(settings.bubblewrap_executable)
         runtime_root = Path(settings.runtime_root)
+
+        policy_ok = False
+        if workspace is not None and workspace.is_dir() and settings.sandbox_enabled:
+            try:
+                validate_sandbox_paths(settings, host_workspace=workspace)
+            except SandboxConfigurationError:
+                pass
+            else:
+                policy_ok = True
+
         node_ok = False
         if node_executable is not None:
             node_path = Path(node_executable)
@@ -113,11 +133,9 @@ class SandboxGateController:
             )
         return (
             not self._running
-            and workspace is not None
-            and workspace.is_dir()
+            and policy_ok
             and self._agent_controller.connection_state
             in {ConnectionState.DISCONNECTED, ConnectionState.FAILED}
-            and settings.sandbox_enabled
             and self._facts.os_name == "Linux"
             and runtime_root.is_dir()
             and bwrap.is_file()
@@ -137,7 +155,7 @@ class SandboxGateController:
     def run(self) -> None:
         if not self.can_run:
             raise SandboxGateControllerError(
-                "sandbox gate requires Linux, a workspace, Bubblewrap, runtime root, visible Node and disconnected Pi"
+                "sandbox gate requires Linux, a valid sandbox policy, Bubblewrap, visible Node and disconnected Pi"
             )
         workspace = self._agent_controller.workspace
         node_executable = self._facts.node_executable
