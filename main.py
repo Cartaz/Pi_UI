@@ -15,7 +15,7 @@ from core.agent.runtime import PiLaunchSpec
 from core.settings import SettingsStore
 from ui.adapters import AgentAdapter
 from ui.models import AgentProfileListModel, MessageListModel
-from ui.native import QProcessAgentTransport
+from ui.native import QProcessAgentTransport, QtDeadlineScheduler
 
 LOGGER = logging.getLogger("pi_ui")
 
@@ -55,6 +55,7 @@ def main() -> int:
         settings_store,
         _create_transport,
         settings=settings,
+        deadline_scheduler_factory=QtDeadlineScheduler,
     )
     message_model = MessageListModel(controller)
     profile_model = AgentProfileListModel(controller)
