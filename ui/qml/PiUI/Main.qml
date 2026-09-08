@@ -6,6 +6,10 @@ import QtQuick.Layouts
 ApplicationWindow {
     id: window
 
+    required property var agentAdapter
+    required property var messageModel
+    required property var profileModel
+
     width: 1180
     height: 760
     minimumWidth: 860
@@ -16,20 +20,20 @@ ApplicationWindow {
 
     function submitComposer() {
         const value = composer.text
-        if (!agentAdapter.canSend || value.trim().length === 0)
+        if (!window.agentAdapter.canSend || value.trim().length === 0)
             return
-        if (agentAdapter.sendMessage(value))
+        if (window.agentAdapter.sendMessage(value))
             composer.clear()
     }
 
     FolderDialog {
         id: workspaceDialog
         title: "Choose AIOS workspace"
-        onAccepted: agentAdapter.setWorkspaceUrl(selectedFolder)
+        onAccepted: window.agentAdapter.setWorkspaceUrl(selectedFolder)
     }
 
     Connections {
-        target: agentAdapter
+        target: window.agentAdapter
         function onRestoreComposerText(text) {
             if (composer.text.length === 0)
                 composer.text = text
@@ -69,8 +73,8 @@ ApplicationWindow {
 
                     Text {
                         Layout.fillWidth: true
-                        text: agentAdapter.workspacePath.length > 0
-                            ? agentAdapter.workspacePath
+                        text: window.agentAdapter.workspacePath.length > 0
+                            ? window.agentAdapter.workspacePath
                             : "No AIOS workspace selected"
                         color: Theme.textSecondary
                         font.family: Theme.fontFamily
@@ -97,16 +101,41 @@ ApplicationWindow {
                         id: profileCombo
                         Layout.fillWidth: true
                         implicitHeight: 42
-                        model: profileModel
+                        model: window.profileModel
                         textRole: "label"
-                        currentIndex: agentAdapter.selectedProfileIndex
-                        enabled: !agentAdapter.canDisconnect
+                        currentIndex: window.agentAdapter.selectedProfileIndex
+                        enabled: !window.agentAdapter.canDisconnect
                         font.family: Theme.fontFamily
                         font.pixelSize: 13
                         leftPadding: 14
                         rightPadding: 34
 
-                        onActivated: agentAdapter.selectProfile(index)
+                        onActivated: function(index) {
+                            window.agentAdapter.selectProfile(index)
+                        }
+
+                        delegate: ItemDelegate {
+                            id: profileDelegate
+                            required property int index
+                            width: profileCombo.width
+                            text: profileCombo.textAt(index)
+                            highlighted: profileCombo.highlightedIndex === index
+
+                            contentItem: Text {
+                                text: profileDelegate.text
+                                color: profileDelegate.highlighted ? Theme.accent : Theme.textPrimary
+                                font: profileCombo.font
+                                verticalAlignment: Text.AlignVCenter
+                                elide: Text.ElideRight
+                            }
+
+                            background: Rectangle {
+                                radius: Theme.radiusSmall
+                                color: profileDelegate.highlighted
+                                    ? Qt.rgba(0, 0, 0, 0.22)
+                                    : Theme.surface
+                            }
+                        }
 
                         contentItem: Text {
                             leftPadding: profileCombo.leftPadding
@@ -136,36 +165,52 @@ ApplicationWindow {
                             border.color: profileCombo.activeFocus ? Theme.accent : "transparent"
                         }
 
-                        popup.background: Rectangle {
-                            radius: Theme.radiusSmall
-                            color: Theme.surface
-                            border.width: 1
-                            border.color: Qt.rgba(1, 1, 1, 0.07)
+                        popup: Popup {
+                            id: profilePopup
+                            y: profileCombo.height + 5
+                            width: profileCombo.width
+                            padding: 5
+                            implicitHeight: Math.min(contentItem.implicitHeight + 10, 280)
+
+                            contentItem: ListView {
+                                clip: true
+                                implicitHeight: contentHeight
+                                model: profilePopup.visible ? profileCombo.delegateModel : null
+                                currentIndex: profileCombo.highlightedIndex
+                                ScrollIndicator.vertical: ScrollIndicator { }
+                            }
+
+                            background: Rectangle {
+                                radius: Theme.radiusSmall
+                                color: Theme.surface
+                                border.width: 1
+                                border.color: Qt.rgba(1, 1, 1, 0.07)
+                            }
                         }
                     }
                 }
 
                 NeuButton {
                     text: "Workspace"
-                    enabled: !agentAdapter.canDisconnect
+                    enabled: !window.agentAdapter.canDisconnect
                     onClicked: workspaceDialog.open()
                 }
 
                 NeuButton {
                     text: "Rescan"
-                    enabled: agentAdapter.hasWorkspace && !agentAdapter.canDisconnect
-                    onClicked: agentAdapter.refreshProfiles()
+                    enabled: window.agentAdapter.hasWorkspace && !window.agentAdapter.canDisconnect
+                    onClicked: window.agentAdapter.refreshProfiles()
                 }
 
                 NeuButton {
                     accentText: true
-                    text: agentAdapter.canDisconnect ? "Disconnect" : "Connect"
-                    enabled: agentAdapter.canDisconnect || agentAdapter.canConnect
+                    text: window.agentAdapter.canDisconnect ? "Disconnect" : "Connect"
+                    enabled: window.agentAdapter.canDisconnect || window.agentAdapter.canConnect
                     onClicked: {
-                        if (agentAdapter.canDisconnect)
-                            agentAdapter.disconnectAgent()
+                        if (window.agentAdapter.canDisconnect)
+                            window.agentAdapter.disconnectAgent()
                         else
-                            agentAdapter.connectAgent()
+                            window.agentAdapter.connectAgent()
                     }
                 }
             }
@@ -196,8 +241,8 @@ ApplicationWindow {
                     Item { Layout.fillWidth: true }
 
                     Text {
-                        text: agentAdapter.statusText
-                        color: agentAdapter.lastError.length > 0
+                        text: window.agentAdapter.statusText
+                        color: window.agentAdapter.lastError.length > 0
                             ? Theme.errorText
                             : Theme.textSecondary
                         font.family: Theme.fontFamily
@@ -215,7 +260,7 @@ ApplicationWindow {
                     Text {
                         anchors.centerIn: parent
                         visible: transcript.count === 0
-                        text: agentAdapter.connectionState === "ready"
+                        text: window.agentAdapter.connectionState === "ready"
                             ? "Start a conversation with your AIOS"
                             : "Connect Pi to load the conversation"
                         color: Theme.textMuted
@@ -229,7 +274,7 @@ ApplicationWindow {
                         clip: true
                         reuseItems: true
                         spacing: 10
-                        model: messageModel
+                        model: window.messageModel
                         boundsBehavior: Flickable.StopAtBounds
                         ScrollBar.vertical: ScrollBar { }
                         property bool followTail: true
@@ -246,6 +291,7 @@ ApplicationWindow {
                         }
 
                         delegate: Item {
+                            id: messageDelegate
                             required property string messageId
                             required property string messageRole
                             required property string text
@@ -258,11 +304,11 @@ ApplicationWindow {
                                 id: bubble
                                 width: Math.min(parent.width * 0.84, Math.max(220, messageText.implicitWidth + 38))
                                 height: messageColumn.implicitHeight + 24
-                                x: messageRole === "user" ? parent.width - width - 8 : 8
+                                x: messageDelegate.messageRole === "user" ? parent.width - width - 8 : 8
                                 radius: Theme.radiusControl
                                 color: Theme.surface
                                 border.width: 1
-                                border.color: messageRole === "user"
+                                border.color: messageDelegate.messageRole === "user"
                                     ? Qt.rgba(1, 102 / 255, 0, 0.22)
                                     : Qt.rgba(1, 1, 1, 0.055)
 
@@ -275,8 +321,10 @@ ApplicationWindow {
                                     spacing: 6
 
                                     Text {
-                                        text: messageRole === "user" ? "You" : "Ornith"
-                                        color: messageRole === "user" ? Theme.accent : Theme.textSecondary
+                                        text: messageDelegate.messageRole === "user" ? "You" : "Ornith"
+                                        color: messageDelegate.messageRole === "user"
+                                            ? Theme.accent
+                                            : Theme.textSecondary
                                         font.family: Theme.fontFamily
                                         font.pixelSize: 11
                                         font.weight: Font.DemiBold
@@ -285,7 +333,7 @@ ApplicationWindow {
                                     Text {
                                         id: messageText
                                         width: parent.width
-                                        text: parent.parent.parent.text
+                                        text: messageDelegate.text
                                         color: Theme.textPrimary
                                         font.family: Theme.fontFamily
                                         font.pixelSize: 14
@@ -295,8 +343,8 @@ ApplicationWindow {
                                     }
 
                                     Text {
-                                        visible: messageState !== "complete"
-                                        text: messageState
+                                        visible: messageDelegate.messageState !== "complete"
+                                        text: messageDelegate.messageState
                                         color: Theme.textMuted
                                         font.family: Theme.fontFamily
                                         font.pixelSize: 10
@@ -317,11 +365,11 @@ ApplicationWindow {
                     TextArea {
                         id: composer
                         anchors.fill: parent
-                        enabled: agentAdapter.connectionState === "ready"
+                        enabled: window.agentAdapter.connectionState === "ready"
                         color: Theme.textPrimary
                         selectionColor: Theme.accent
                         selectedTextColor: Theme.surface
-                        placeholderText: agentAdapter.canSend
+                        placeholderText: window.agentAdapter.canSend
                             ? "Message Ornith…  Enter to send · Shift+Enter for a new line"
                             : "Connect Pi and wait for the session to load"
                         placeholderTextColor: Theme.textMuted
@@ -348,9 +396,9 @@ ApplicationWindow {
 
                     Text {
                         Layout.fillWidth: true
-                        text: agentAdapter.turnState === "running"
+                        text: window.agentAdapter.turnState === "running"
                             ? "Turn in progress"
-                            : (agentAdapter.connectionState === "loading-session"
+                            : (window.agentAdapter.connectionState === "loading-session"
                                 ? "Loading existing session…"
                                 : "")
                         color: Theme.textMuted
@@ -360,14 +408,14 @@ ApplicationWindow {
 
                     NeuButton {
                         text: "Stop"
-                        enabled: agentAdapter.canStop
-                        onClicked: agentAdapter.stopTurn()
+                        enabled: window.agentAdapter.canStop
+                        onClicked: window.agentAdapter.stopTurn()
                     }
 
                     NeuButton {
                         text: "Send"
                         accentText: true
-                        enabled: agentAdapter.canSend && composer.text.trim().length > 0
+                        enabled: window.agentAdapter.canSend && composer.text.trim().length > 0
                         onClicked: window.submitComposer()
                     }
                 }
