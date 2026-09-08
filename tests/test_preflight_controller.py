@@ -56,8 +56,8 @@ def _agent_controller(tmp_path: Path) -> tuple[AgentController, HostRuntimeFacts
     _write_models(workspace)
     runtime_root = tmp_path / "runtime"
     pi = _make_executable(runtime_root / "bin" / "pi")
+    node = _make_executable(runtime_root / "bin" / "node")
     bwrap = _make_executable(tmp_path / "bin" / "bwrap")
-    node = _make_executable(tmp_path / "bin" / "node")
     settings = AppSettings(
         workspace_root=str(workspace),
         agent=AgentSettings(
