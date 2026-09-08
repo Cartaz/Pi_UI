@@ -32,6 +32,33 @@ class SandboxConfigurationError(ValueError):
     """Raised when a command cannot be represented inside the sandbox policy."""
 
 
+def validate_sandbox_paths(
+    settings: AgentSettings,
+    *,
+    host_workspace: Path,
+) -> tuple[Path, PurePosixPath]:
+    """Validate the canonical writable/read-only roots and return resolved paths."""
+
+    if not settings.sandbox_enabled:
+        raise SandboxConfigurationError("Bubblewrap policy requires sandbox_enabled")
+
+    runtime_root = PurePosixPath(settings.runtime_root)
+    if not runtime_root.is_absolute():
+        raise SandboxConfigurationError("sandbox runtime_root must be an absolute path")
+    if runtime_root in _UNSAFE_RUNTIME_ROOTS:
+        raise SandboxConfigurationError(
+            "runtime_root is too broad for the Pi_UI confinement policy"
+        )
+
+    workspace = host_workspace.expanduser().resolve()
+    runtime_host = Path(settings.runtime_root).expanduser().resolve()
+    if _paths_overlap(runtime_host, workspace):
+        raise SandboxConfigurationError(
+            "runtime_root must not overlap the writable AIOS workspace"
+        )
+    return workspace, runtime_root
+
+
 def build_bubblewrap_arguments(
     settings: AgentSettings,
     *,
@@ -48,31 +75,19 @@ def build_bubblewrap_arguments(
     owned by this policy and is always ``/home/aios``.
     """
 
-    if not settings.sandbox_enabled:
-        raise SandboxConfigurationError("Bubblewrap policy requires sandbox_enabled")
     if not command or not isinstance(command[0], str) or not command[0]:
         raise SandboxConfigurationError("sandbox command requires an executable")
 
-    runtime_root = PurePosixPath(settings.runtime_root)
+    workspace, runtime_root = validate_sandbox_paths(
+        settings,
+        host_workspace=host_workspace,
+    )
     command_executable = PurePosixPath(command[0])
-    if not runtime_root.is_absolute() or not command_executable.is_absolute():
-        raise SandboxConfigurationError(
-            "sandbox runtime_root and command executable must be absolute paths"
-        )
-    if runtime_root in _UNSAFE_RUNTIME_ROOTS:
-        raise SandboxConfigurationError(
-            "runtime_root is too broad for the Pi_UI confinement policy"
-        )
+    if not command_executable.is_absolute():
+        raise SandboxConfigurationError("sandbox command executable must be absolute")
     if not _command_is_mounted(command_executable, runtime_root):
         raise SandboxConfigurationError(
             "sandbox command executable must be inside /usr or runtime_root"
-        )
-
-    workspace = host_workspace.expanduser().resolve()
-    runtime_host = Path(settings.runtime_root).expanduser().resolve()
-    if _paths_overlap(runtime_host, workspace):
-        raise SandboxConfigurationError(
-            "runtime_root must not overlap the writable AIOS workspace"
         )
 
     return (
