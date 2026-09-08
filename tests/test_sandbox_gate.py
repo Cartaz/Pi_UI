@@ -91,7 +91,7 @@ def test_prepare_uses_canonical_policy_and_only_app_owned_scratch(tmp_path: Path
 
         environment = dict(plan.environment)
         assert environment == {
-            "HOME": "/home/tester",
+            "HOME": "/home/aios",
             "LANG": "it_IT.UTF-8",
             "PATH": f"{settings.runtime_root}/bin:/usr/bin:/bin",
             "PI_OFFLINE": "1",
@@ -100,6 +100,7 @@ def test_prepare_uses_canonical_policy_and_only_app_owned_scratch(tmp_path: Path
         assert "VERY_SECRET" not in environment
         assert "DISPLAY" not in environment
         assert "SSH_AUTH_SOCK" not in environment
+        assert "USER" not in environment
     finally:
         service.cleanup(plan)
 
