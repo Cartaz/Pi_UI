@@ -8,13 +8,13 @@ import re
 import shutil
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Final
 from uuid import uuid4
 
 from core.agent.runtime import PiRuntimePaths, SANDBOX_WORKSPACE
 from core.preflight import CommandProbe, CommandProbeResult, PreflightCheck, PreflightStatus
-from core.sandbox import build_bubblewrap_arguments, command_is_visible_in_sandbox
+from core.sandbox import SANDBOX_HOME, build_bubblewrap_arguments, command_is_visible_in_sandbox
 from core.settings import AgentSettings
 
 _GATE_TIMEOUT_MS: Final = 10_000
@@ -166,7 +166,6 @@ class SandboxGateService:
         outside_root: Path,
         base_environment: Mapping[str, str] | None = None,
         host_pid: int | None = None,
-        user_name: str | None = None,
     ) -> SandboxGatePlan:
         if not settings.sandbox_enabled:
             raise SandboxGateError("active confinement gate requires Bubblewrap sandboxing")
@@ -213,27 +212,24 @@ class SandboxGateService:
             symlink_path.symlink_to(outside_sentinel)
 
             base_env = dict(os.environ if base_environment is None else base_environment)
-            fake_user = user_name or base_env.get("USER") or "aios"
-            sandbox_home = PurePosixPath("/home") / fake_user
             sandbox_script = SANDBOX_WORKSPACE / script_path.relative_to(workspace)
             sandbox_symlink = SANDBOX_WORKSPACE / symlink_path.relative_to(workspace)
             sandbox_arguments = build_bubblewrap_arguments(
                 settings,
                 host_workspace=workspace,
                 sandbox_workspace=paths.sandbox_workspace,
-                sandbox_home=sandbox_home,
                 command=(
                     node_executable,
                     str(sandbox_script),
                     str(outside_sentinel),
                     str(sandbox_symlink),
                     settings.runtime_root,
-                    str(sandbox_home),
+                    str(SANDBOX_HOME),
                     str(host_pid if host_pid is not None else os.getpid()),
                 ),
             )
             environment = (
-                ("HOME", str(sandbox_home)),
+                ("HOME", str(SANDBOX_HOME)),
                 ("LANG", base_env.get("LANG", "C.UTF-8")),
                 ("PATH", f"{settings.runtime_root}/bin:/usr/bin:/bin"),
                 ("PI_OFFLINE", "1"),
