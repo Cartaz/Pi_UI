@@ -620,7 +620,8 @@ class AgentController:
                 latest_user_index = len(loaded) - 1
                 continue
 
-            if raw.get("stopReason") == "error":
+            stop_reason = raw.get("stopReason")
+            if stop_reason == "error":
                 if latest_user_index is not None:
                     loaded[latest_user_index] = replace(
                         loaded[latest_user_index],
@@ -637,6 +638,11 @@ class AgentController:
                     )
                 continue
 
+            if latest_user_index is not None and stop_reason != "toolUse":
+                loaded[latest_user_index] = replace(
+                    loaded[latest_user_index],
+                    state=MessageState.COMPLETE,
+                )
             if not text:
                 continue
             loaded.append(
