@@ -112,3 +112,13 @@ def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) ->
     controller.shutdown()
     engine.deleteLater()
     app.processEvents()
+
+
+def test_workspace_picker_accepts_the_displayed_folder() -> None:
+    main_qml = (
+        Path(__file__).resolve().parents[1] / "ui" / "qml" / "PiUI" / "Main.qml"
+    ).read_text(encoding="utf-8")
+
+    assert 'acceptLabel: "Use this folder"' in main_qml
+    assert "setWorkspaceUrl(currentFolder)" in main_qml
+    assert "setWorkspaceUrl(selectedFolder)" not in main_qml
