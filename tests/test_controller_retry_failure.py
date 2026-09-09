@@ -136,6 +136,7 @@ def test_terminal_retry_failure_never_returns_controller_to_ready(tmp_path: Path
     assert controller.connection_state == ConnectionState.FAILED
     assert controller.can_send is False
     assert controller.can_disconnect is True
+    assert controller.messages[-1].state == MessageState.FAILED
     assert controller.last_error is not None
     assert "after 3 attempts" in controller.last_error
     assert "ECONNREFUSED" in controller.last_error
@@ -145,6 +146,7 @@ def test_terminal_retry_failure_never_returns_controller_to_ready(tmp_path: Path
     assert controller.connection_state == ConnectionState.FAILED
     assert controller.can_send is False
     assert controller.can_disconnect is True
+    assert controller.messages[-1].state == MessageState.FAILED
     assert controller.last_error is not None
     assert "ECONNREFUSED" in controller.last_error
     assert sum(item.get("type") == "prompt" for item in transport.sent) == 1
@@ -189,6 +191,7 @@ def test_explicit_reconnect_after_terminal_failure_restores_send_ready(
     assert controller.connection_state == ConnectionState.FAILED
     assert controller.turn_state == TurnState.FAILED
     assert controller.can_send is False
+    assert controller.messages[-1].state == MessageState.FAILED
 
     controller.disconnect_agent()
     assert controller.connection_state == ConnectionState.DISCONNECTED
@@ -214,6 +217,9 @@ def test_explicit_reconnect_after_terminal_failure_restores_send_ready(
     assert controller.connection_state == ConnectionState.READY
     assert controller.turn_state == TurnState.IDLE
     assert controller.can_send is True
+    assert len(controller.messages) == 1
+    assert controller.messages[0].text == "failed accepted prompt"
+    assert controller.messages[0].state == MessageState.FAILED
     assert [item["type"] for item in second.sent] == ["get_state", "get_messages"]
 
 
