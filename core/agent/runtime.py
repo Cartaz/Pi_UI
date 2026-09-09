@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 from typing import Mapping
 
 from core.sandbox import SANDBOX_HOME, build_bubblewrap_arguments
+from core.session_id import is_valid_session_id
 from core.settings import AgentSettings
 
 SANDBOX_WORKSPACE = PurePosixPath("/workspace")
@@ -67,6 +68,8 @@ def build_launch_spec(
     working_directory: Path,
     paths: PiRuntimePaths | None = None,
     base_environment: Mapping[str, str] | None = None,
+    session_id: str | None = None,
+    continue_latest: bool = False,
 ) -> PiLaunchSpec:
     """Create argv/environment for Pi RPC without invoking a shell.
 
@@ -74,7 +77,18 @@ def build_launch_spec(
     process and Bubblewrap execs Pi inside the AIOS mount namespace. The child
     environment is allow-listed here instead of inherited wholesale from the
     desktop session.
+
+    ``session_id`` resumes one exact Pi session. ``continue_latest`` is only a
+    bootstrap policy for installations that do not yet have a captured session
+    id. They are intentionally mutually exclusive.
     """
+
+    if session_id is not None and not is_valid_session_id(session_id):
+        raise RuntimeConfigurationError("invalid Pi session id")
+    if session_id is not None and continue_latest:
+        raise RuntimeConfigurationError(
+            "session_id and continue_latest cannot be requested together"
+        )
 
     runtime_paths = paths or PiRuntimePaths.for_workspace(working_directory)
     base_env = dict(os.environ if base_environment is None else base_environment)
@@ -84,7 +98,12 @@ def build_launch_spec(
         base_environment=base_env,
         paths=runtime_paths,
     )
-    pi_arguments = _build_pi_arguments(settings, runtime_paths)
+    pi_arguments = _build_pi_arguments(
+        settings,
+        runtime_paths,
+        session_id=session_id,
+        continue_latest=continue_latest,
+    )
 
     if not settings.sandbox_enabled:
         return PiLaunchSpec(
@@ -160,6 +179,9 @@ def _build_sanitized_environment(
 def _build_pi_arguments(
     settings: AgentSettings,
     paths: PiRuntimePaths,
+    *,
+    session_id: str | None,
+    continue_latest: bool,
 ) -> list[str]:
     session_dir = (
         str(paths.sandbox_session_dir)
@@ -167,6 +189,10 @@ def _build_pi_arguments(
         else str(paths.host_session_dir)
     )
     arguments = ["--mode", "rpc", "--session-dir", session_dir]
+    if session_id is not None:
+        arguments.extend(("--session", session_id))
+    elif continue_latest:
+        arguments.append("--continue")
     if settings.provider:
         arguments.extend(("--provider", settings.provider))
     if settings.model:
