@@ -15,7 +15,7 @@ from core.atomic_file import atomic_write_text, fsync_directory
 from core.session_id import is_valid_session_id
 
 APP_DIR_NAME: Final = "pi-ui"
-CURRENT_SCHEMA_VERSION: Final = 5
+CURRENT_SCHEMA_VERSION: Final = 6
 SUPPORTED_MODEL_APIS: Final = frozenset(
     {
         "openai-completions",
@@ -170,7 +170,7 @@ def _migrate_settings(raw: Any) -> dict[str, Any]:
     version = raw.get("schema_version", 1)
     if version == CURRENT_SCHEMA_VERSION:
         return dict(raw)
-    if version not in {1, 2, 3, 4}:
+    if version not in {1, 2, 3, 4, 5}:
         raise SettingsValidationError(
             f"unsupported settings schema version: {version!r}"
         )
@@ -195,10 +195,11 @@ def _migrate_settings(raw: Any) -> dict[str, Any]:
     agent.setdefault("request_timeout_ms", defaults.request_timeout_ms)
     agent.setdefault("inactivity_timeout_ms", defaults.inactivity_timeout_ms)
 
-    # Schema 5 persists the exact Pi session selected for the active workspace.
-    # Existing installations intentionally start with no pointer and bootstrap
-    # through Pi's --continue behavior once before capturing the authoritative ID.
-    migrated.setdefault("last_session_id", None)
+    # Schema 6 invalidates every pointer created by schema 5. Schema 5 could
+    # bootstrap with Pi's global --continue selection, so a captured ID may
+    # belong to another concurrent Pi client sharing the same session directory.
+    # The next successful Pi_UI launch starts fresh and records its own ID.
+    migrated["last_session_id"] = None
 
     migrated["agent"] = agent
     migrated["schema_version"] = CURRENT_SCHEMA_VERSION
