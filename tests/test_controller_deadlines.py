@@ -147,6 +147,20 @@ def _transport(harness: Harness) -> FakeTransport:
 def _connect_empty(controller: AgentController, harness: Harness) -> FakeTransport:
     controller.connect_agent()
     transport = _transport(harness)
+    state = transport.sent[-1]
+    assert state["type"] == "get_state"
+    transport.emit(
+        {
+            "id": state["id"],
+            "type": "response",
+            "command": "get_state",
+            "success": True,
+            "data": {
+                "sessionId": "01deadline",
+                "sessionFile": "/workspace/.pi-agent/sessions/01deadline.jsonl",
+            },
+        }
+    )
     history = transport.sent[-1]
     assert history["type"] == "get_messages"
     transport.emit(
@@ -228,3 +242,17 @@ def test_inactivity_warning_keeps_turn_running_and_stoppable(tmp_path: Path) -> 
     assert controller.messages[-1].role == "assistant"
     assert controller.messages[-1].text == "alive"
     assert controller.can_stop is True
+
+
+def test_session_state_timeout_fails_closed_and_stops_process(tmp_path: Path) -> None:
+    harness = Harness()
+    controller = _controller(tmp_path, harness)
+
+    controller.connect_agent()
+    transport = _transport(harness)
+    assert transport.sent[-1]["type"] == "get_state"
+
+    harness.scheduler.latest(30_000).fire()
+
+    assert controller.connection_state == ConnectionState.FAILED
+    assert controller.session_ready is False
