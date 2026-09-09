@@ -244,15 +244,19 @@ def test_inactivity_warning_keeps_turn_running_and_stoppable(tmp_path: Path) -> 
     assert controller.can_stop is True
 
 
-def test_session_state_timeout_fails_closed_and_stops_process(tmp_path: Path) -> None:
+def test_session_state_timeout_blocks_session_readiness_without_retry(tmp_path: Path) -> None:
     harness = Harness()
     controller = _controller(tmp_path, harness)
 
     controller.connect_agent()
     transport = _transport(harness)
     assert transport.sent[-1]["type"] == "get_state"
+    sent_count = len(transport.sent)
 
     harness.scheduler.latest(30_000).fire()
 
+    assert len(transport.sent) == sent_count
     assert controller.connection_state == ConnectionState.FAILED
     assert controller.session_ready is False
+    assert controller.can_send is False
+    assert controller.can_disconnect is True
