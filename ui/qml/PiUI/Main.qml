@@ -35,7 +35,8 @@ ApplicationWindow {
     FolderDialog {
         id: workspaceDialog
         title: "Choose AIOS workspace"
-        onAccepted: window.agentAdapter.setWorkspaceUrl(selectedFolder)
+        acceptLabel: "Use this folder"
+        onAccepted: window.agentAdapter.setWorkspaceUrl(currentFolder)
     }
 
     Popup {
