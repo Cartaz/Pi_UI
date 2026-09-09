@@ -14,6 +14,7 @@ from .client import (
     AgentClientError,
     AgentInactivityTimeoutError,
     AgentRequestTimeoutError,
+    AgentTurnFailedError,
     TurnState,
 )
 from .deadlines import DeadlineHandle, DeadlineScheduler
@@ -49,6 +50,7 @@ __all__ = [
     "AgentClientError",
     "AgentInactivityTimeoutError",
     "AgentRequestTimeoutError",
+    "AgentTurnFailedError",
     "AgentTransport",
     "DeadlineHandle",
     "DeadlineScheduler",
