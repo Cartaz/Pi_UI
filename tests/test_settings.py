@@ -35,11 +35,12 @@ def test_missing_settings_returns_defaults(tmp_path: Path) -> None:
     assert store.last_recovery is None
 
 
-def test_round_trip_settings_and_endpoint_change(tmp_path: Path) -> None:
+def test_round_trip_settings_endpoint_and_session_change(tmp_path: Path) -> None:
     path = tmp_path / "config" / "settings.json"
     store = SettingsStore(path)
     settings = AppSettings(
         workspace_root="/home/tester/Knowledge",
+        last_session_id="01abc-session_1",
         agent=AgentSettings(
             provider="ornith-lan",
             model="ornith-1.5",
@@ -55,10 +56,33 @@ def test_round_trip_settings_and_endpoint_change(tmp_path: Path) -> None:
 
     changed = replace(
         loaded,
+        last_session_id="01abc-session_2",
         agent=replace(loaded.agent, base_url="http://192.0.2.11:8080/v1"),
     )
     store.save(changed)
-    assert store.load().agent.base_url == "http://192.0.2.11:8080/v1"
+    reloaded = store.load()
+    assert reloaded.agent.base_url == "http://192.0.2.11:8080/v1"
+    assert reloaded.last_session_id == "01abc-session_2"
+
+
+def test_schema_four_migrates_without_inventing_session_id(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 4,
+                "workspace_root": "/home/tester/Knowledge",
+                "agent": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = SettingsStore(path).load()
+
+    assert loaded.schema_version == 5
+    assert loaded.workspace_root == "/home/tester/Knowledge"
+    assert loaded.last_session_id is None
 
 
 def test_save_leaves_no_temporary_file(tmp_path: Path) -> None:
@@ -97,3 +121,10 @@ def test_rejects_credentials_embedded_in_base_url_on_save(tmp_path: Path) -> Non
     )
     with pytest.raises(SettingsValidationError, match="must not contain credentials"):
         store.save(settings)
+
+
+@pytest.mark.parametrize("session_id", ["", "bad/session", "-bad", "bad-", "bad space"])
+def test_rejects_invalid_persisted_session_id(tmp_path: Path, session_id: str) -> None:
+    store = SettingsStore(tmp_path / "settings.json")
+    with pytest.raises(SettingsValidationError, match="last_session_id"):
+        store.save(AppSettings(last_session_id=session_id))
