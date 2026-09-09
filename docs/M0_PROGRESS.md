@@ -9,7 +9,7 @@ Questo documento registra evidenze incrementali della milestone M0 distinguendo 
 ### Fondazione core e configurazione
 
 - `core/settings.py`: settings tipizzati, percorsi XDG, validazione, migrazioni di schema, scrittura atomica e recovery da JSON malformato/non compatibile.
-- Settings schema 5: timeout distinti e puntatore persistito all'esatta sessione Pi attiva (`last_session_id`).
+- Settings schema 6: timeout distinti e puntatore persistito all'esatta sessione Pi attiva (`last_session_id`). La migrazione da schema 5 invalida il puntatore perché le build schema-5 potevano acquisirlo tramite una selezione `--continue` ambigua.
 - Configurazione provider/modello Pi derivabile dallo stato canonico Pi_UI, con credenziali soltanto tramite riferimenti a variabili d'ambiente.
 - Discovery read-only di `AIOS_ROOT/.pi-agent/models.json`, fingerprint SHA-256 e verifica immediatamente prima del launch; nessuna adozione/sovrascrittura implicita.
 - Un `models.json` presente ma corrotto/non interpretabile non fa fallire l'avvio della GUI: produce zero profili e blocca Connect.
@@ -34,7 +34,8 @@ Questo documento registra evidenze incrementali della milestone M0 distinguendo 
 - Watchdog inattività non distruttivo.
 - `QProcessAgentTransport` asincrono con stderr separato e shutdown `terminate()` → `kill()` temporizzato.
 - `AppShutdownCoordinator` mantiene vivo l'event loop durante lo shutdown e ha un watchdog finale.
-- Session continuity: primo bootstrap senza puntatore usa Pi `--continue`, poi `get_state` fornisce il `sessionId` autorevole che viene persistito. Reconnect/restart successivi usano `--session <id>` esplicito. Pi_UI verifica l'identità della sessione prima di caricare `get_messages` e fallisce chiuso se Pi apre una sessione diversa.
+- Session ownership schema 6: se Pi_UI non ha ancora un proprio `last_session_id`, avvia Pi senza `--continue` e senza `--session`, quindi acquisisce via `get_state` il nuovo `sessionId` autorevole e lo persiste. Reconnect/restart successivi usano `--session <id>` esplicito. Pi_UI verifica l'identità della sessione prima di caricare `get_messages` e fallisce chiuso se Pi apre una sessione diversa.
+- Il supporto low-level a `continue_latest` resta una capacità esplicita del runtime Pi, ma non è usato automaticamente dal controller. Un'eventuale futura adozione/importazione di sessioni esistenti dovrà essere un'azione utente esplicita.
 
 ### Prima shell Qt Quick
 
@@ -42,6 +43,7 @@ Questo documento registra evidenze incrementali della milestone M0 distinguendo 
 - Controller Python presentation-independent, adapter focalizzati e `QAbstractListModel` per profili/transcript.
 - QML dark-neumorphic centralizzato.
 - Workspace/profile selection, connect/disconnect, cronologia RPC, transcript virtualizzato, composer, send e stop reali.
+- Folder picker KDE: l'accept usa la cartella attualmente visualizzata (`currentFolder`) con azione esplicita `Use this folder`, evitando la selezione incidentale del primo figlio.
 
 ### Preflight e gate attivo
 
@@ -71,7 +73,7 @@ Prove osservate:
 1. installazione editable su Python 3.14.7: riuscita;
 2. `compileall`: PASS;
 3. `qmllint --max-warnings 0`: PASS;
-4. pytest locale: **134 passed** sulla build M0 precedente al session-resume fix;
+4. pytest locale: **134 passed** sulla build M0 precedente ai fix sessione;
 5. Host checks GUI: **Blocking 0, Warnings 1, Pending target gate 1**; unico warning previsto `--share-net`;
 6. Sandbox gate GUI reale: **Passed 11, Failed 0**;
 7. Pi → Ornith LAN: PASS;
@@ -81,9 +83,11 @@ Prove osservate:
 11. `/home/francesco` non accessibile all'agente: PASS;
 12. Internet raggiungibile dal sandbox: PASS;
 13. Disconnect: i processi Bubblewrap/Pi_UI sono terminati; i soli processi rimasti appartenevano a una sessione `pi-aios` indipendente già esistente: PASS;
-14. reconnect processo/modello: PASS (`RECONNECT_OK`), ma la build precedente ha creato una nuova sessione vuota e perso la cronologia visibile: **bug riprodotto sul target**.
+14. reconnect processo/modello sulla prima build: PASS (`RECONNECT_OK`), ma la cronologia è sparita perché veniva creata una nuova sessione: bug riprodotto;
+15. folder picker KDE dopo il fix #14: entrando in `AI_OS` e confermando la cartella, Pi_UI seleziona correttamente `/home/francesco/AI_OS`: PASS;
+16. primo Connect della build schema-5 session-resume con un altro `pi-aios` concorrente: Pi `--continue` ha adottato la sessione attiva/più recente dell'altro agente invece di crearne una Pi_UI. Nessun nuovo messaggio è stato inviato; l'utente ha disconnesso. **Bug riprodotto sul target**, issue #15.
 
-Il punto 14 ha generato il fix session-resume di schema 5. Quel fix è verificato sinteticamente in CI ma richiede ancora il retest reale Disconnect → Connect e app restart sulla macchina target.
+Il punto 16 motiva schema 6: ogni puntatore schema-5 viene invalidato e il primo bootstrap Pi_UI torna ad essere una sessione nuova, mentre i reconnect successivi restano pin all'ID esatto.
 
 ## Evidenze CI osservate
 
@@ -94,7 +98,7 @@ GitHub Actions esegue su Python **3.12, 3.13 e 3.14**:
 3. `pyside6-qmllint --max-warnings 0 -I ui/qml ui/qml/PiUI/*.qml`;
 4. `python -m pytest` con `QT_QPA_PLATFORM=offscreen`.
 
-PR #13 session-resume ha osservato questi step verdi su tutte e tre le versioni dopo l'aggiornamento di schema. La suite copre ora bootstrap `--continue`, reconnect `--session <id>`, persistenza/restart, mismatch sessione fail-closed, oltre ai precedenti test RPC/QML/Bubblewrap/lifecycle.
+PR #13 session-resume e PR #14 folder-picker hanno osservato questi step verdi su tutte e tre le versioni. La suite copre pin `--session <id>`, persistenza/restart, mismatch sessione fail-closed, QML e sandbox/lifecycle. La PR schema-6 aggiunge il caso in cui una sessione estranea è già presente nel directory condiviso e verifica che il primo Connect non usi né `--continue` né `--session`.
 
 ## Contratti upstream Pi usati
 
@@ -102,6 +106,7 @@ La documentazione/codice upstream corrente confermano:
 
 - `pi --mode rpc` via stdin/stdout JSONL;
 - `get_state` espone `sessionId` e `sessionFile`;
+- senza `--continue`/`--session`, Pi crea una nuova sessione;
 - `--continue` continua la sessione più recente o ne crea una se non esiste;
 - `--session <path|id>` apre una sessione specifica e fallisce se non viene trovata;
 - `--session-dir`, `PI_CODING_AGENT_SESSION_DIR` e `PI_CODING_AGENT_DIR` isolano lo storage;
@@ -128,21 +133,22 @@ Riferimenti primari:
 
 ## Lavoro M0 ancora aperto
 
-### Richiede retest target dopo il session-resume fix
+### Richiede retest target dopo schema 6
 
-- Pull della build con schema 5.
-- Verificare che il primo bootstrap adotti una sessione e persista l'ID.
-- Verificare **Disconnect → Connect mantenendo la stessa cronologia**.
-- Verificare chiusura completa dell'app con Pi connesso, assenza di orphan e successivo restart con la stessa cronologia.
+- Pull della build con schema 6.
+- Con un altro `pi-aios` ancora attivo, verificare che il **primo Connect Pi_UI apra una conversazione nuova**, non quella dell'altro agente.
+- Inviare un marker nella nuova sessione e verificare **Disconnect → Connect mantenendo la stessa cronologia**.
+- Chiudere completamente l'app con Pi connesso, verificare assenza di orphan, riaprire e verificare la stessa cronologia.
 - Verificare server Ornith down/error e recovery senza replay o freeze.
-- Eseguire almeno tre sessioni/riavvii consecutivi dopo il pin dell'ID.
+- Eseguire almeno tre reconnect/riavvii consecutivi dopo il pin dell'ID.
 - Verifica grafica/focus finale su KDE/Wayland.
 
 ### UX/funzionalità osservate ma non bloccanti per il runtime M0
 
-- Folder picker KDE: l'azione corrente può selezionare incidentalmente il primo figlio; issue #8.
 - Reasoning stream non ancora proiettato in UI benché Pi RPC esponga `thinking_*`; issue #9.
 - Metriche grounded token/timing/tok/s; issue #10.
 - Copia esplicita messaggi user/assistant; issue #11.
 
-M0 resta **in corso** fino al retest reale del session-resume, shutdown/restart e server recovery.
+Folder picker KDE issue #8 è stata corretta e verificata sul target.
+
+M0 resta **in corso** fino al retest reale dello schema 6, shutdown/restart e server recovery.

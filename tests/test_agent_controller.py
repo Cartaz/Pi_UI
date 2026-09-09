@@ -90,9 +90,7 @@ class TransportHarness:
         return self.transport
 
 
-def test_existing_baseline_connects_loads_history_and_streams_reply(
-    tmp_path: Path,
-) -> None:
+def test_existing_baseline_connects_fresh_and_streams_reply(tmp_path: Path) -> None:
     _write_existing_profile(tmp_path)
     harness = TransportHarness()
     controller = _controller(tmp_path, harness)
@@ -106,7 +104,9 @@ def test_existing_baseline_connects_loads_history_and_streams_reply(
     controller.connect_agent()
     transport = _transport(harness)
     assert controller.connection_state == ConnectionState.LOADING_SESSION
-    assert _pi_arguments(harness.launch_specs[-1]).count("--continue") == 1
+    first_args = _pi_arguments(harness.launch_specs[-1])
+    assert "--continue" not in first_args
+    assert "--session" not in first_args
     assert transport.sent[-1]["type"] == "get_state"
     _emit_session_state(transport, session_id="01session")
     assert transport.sent[-1]["type"] == "get_messages"
@@ -117,26 +117,14 @@ def test_existing_baseline_connects_loads_history_and_streams_reply(
             "type": "response",
             "command": "get_messages",
             "success": True,
-            "data": {
-                "messages": [
-                    {"role": "user", "content": "Earlier question"},
-                    {
-                        "role": "assistant",
-                        "content": [{"type": "text", "text": "Earlier answer"}],
-                    },
-                    {"role": "toolResult", "content": []},
-                ]
-            },
+            "data": {"messages": []},
         }
     )
 
     assert controller.connection_state == ConnectionState.READY
     assert controller.can_send is True
     assert controller.settings.last_session_id == "01session"
-    assert [(m.role, m.text) for m in controller.messages] == [
-        ("user", "Earlier question"),
-        ("assistant", "Earlier answer"),
-    ]
+    assert controller.messages == ()
 
     controller.send_message("New question")
     prompt = transport.sent[-1]
@@ -197,6 +185,23 @@ def test_existing_baseline_connects_loads_history_and_streams_reply(
     assert harness.timeouts == (10_000, 5_000)
 
 
+def test_first_connect_ignores_unrelated_sessions_in_shared_directory(
+    tmp_path: Path,
+) -> None:
+    _write_existing_profile(tmp_path)
+    sessions = tmp_path / ".pi-agent" / "sessions"
+    sessions.mkdir()
+    (sessions / "foreign-session.jsonl").write_text("{}\n", encoding="utf-8")
+    harness = TransportHarness()
+    controller = _controller(tmp_path, harness)
+
+    controller.connect_agent()
+
+    args = _pi_arguments(harness.launch_specs[-1])
+    assert "--continue" not in args
+    assert "--session" not in args
+
+
 def test_disconnect_reconnect_uses_exact_captured_session_and_restores_history(
     tmp_path: Path,
 ) -> None:
@@ -206,7 +211,7 @@ def test_disconnect_reconnect_uses_exact_captured_session_and_restores_history(
     _connect_empty(controller, harness, session_id="01stable")
 
     first_args = _pi_arguments(harness.launch_specs[0])
-    assert "--continue" in first_args
+    assert "--continue" not in first_args
     assert "--session" not in first_args
 
     controller.disconnect_agent()

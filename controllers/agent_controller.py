@@ -319,7 +319,6 @@ class AgentController:
 
         try:
             session_id = self._requested_session_id
-            continue_latest = session_id is None
             if profile.source == RuntimeProfileSource.EXISTING:
                 existing = self._existing_config
                 if existing is None or existing.sha256 is None or profile.discovered is None:
@@ -330,14 +329,12 @@ class AgentController:
                     profile=profile.discovered,
                     expected_sha256=existing.sha256,
                     session_id=session_id,
-                    continue_latest=continue_latest,
                 )
             else:
                 prepared = self._bootstrap.prepare(
                     self._settings.agent,
                     workspace=self._workspace,
                     session_id=session_id,
-                    continue_latest=continue_latest,
                 )
 
             agent_settings = self._settings.agent
