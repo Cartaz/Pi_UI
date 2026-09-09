@@ -80,7 +80,28 @@ def test_schema_four_migrates_without_inventing_session_id(tmp_path: Path) -> No
 
     loaded = SettingsStore(path).load()
 
-    assert loaded.schema_version == 5
+    assert loaded.schema_version == 6
+    assert loaded.workspace_root == "/home/tester/Knowledge"
+    assert loaded.last_session_id is None
+
+
+def test_schema_five_invalidates_ambiguous_session_pointer(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 5,
+                "workspace_root": "/home/tester/Knowledge",
+                "last_session_id": "01possibly-foreign",
+                "agent": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = SettingsStore(path).load()
+
+    assert loaded.schema_version == 6
     assert loaded.workspace_root == "/home/tester/Knowledge"
     assert loaded.last_session_id is None
 
