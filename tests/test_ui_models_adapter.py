@@ -90,7 +90,22 @@ def test_qt_models_and_adapter_follow_controller_without_duplicate_state(
 
     assert adapter.connectAgent() is True
     transport = _transport(harness)
+    state = transport.sent[-1]
+    assert state["type"] == "get_state"
+    transport.emit(
+        {
+            "id": state["id"],
+            "type": "response",
+            "command": "get_state",
+            "success": True,
+            "data": {
+                "sessionId": "01adapter",
+                "sessionFile": "/workspace/.pi-agent/sessions/01adapter.jsonl",
+            },
+        }
+    )
     history = transport.sent[-1]
+    assert history["type"] == "get_messages"
     transport.emit(
         {
             "id": history["id"],
