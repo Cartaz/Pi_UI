@@ -70,6 +70,18 @@ def id_sequence() -> Callable[[], str]:
     return next_id
 
 
+def test_start_publishes_initial_idle_turn_state() -> None:
+    transport = FakeTransport()
+    client = AgentClient(transport, id_factory=id_sequence())
+    states: list[TurnState] = []
+    client.set_turn_state_handler(states.append)
+
+    client.start()
+
+    assert states == [TurnState.IDLE]
+    assert client.turn_state == TurnState.IDLE
+
+
 def test_prompt_response_acceptance_is_not_turn_completion() -> None:
     transport = FakeTransport()
     client = AgentClient(transport, id_factory=id_sequence())
@@ -103,7 +115,7 @@ def test_prompt_response_acceptance_is_not_turn_completion() -> None:
 
     transport.emit_record({"type": "agent_settled"})
     assert client.turn_state == TurnState.IDLE
-    assert states == [TurnState.RUNNING, TurnState.IDLE]
+    assert states == [TurnState.IDLE, TurnState.RUNNING, TurnState.IDLE]
 
 
 def test_terminal_retry_failure_stays_failed_after_agent_settled() -> None:
@@ -183,7 +195,7 @@ def test_terminal_retry_failure_stays_failed_after_agent_settled() -> None:
     transport.emit_record({"type": "agent_settled"})
 
     assert client.turn_state == TurnState.FAILED
-    assert states == [TurnState.RUNNING, TurnState.FAILED]
+    assert states == [TurnState.IDLE, TurnState.RUNNING, TurnState.FAILED]
 
 
 def test_non_retryable_agent_error_is_terminal() -> None:
