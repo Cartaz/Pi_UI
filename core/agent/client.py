@@ -46,6 +46,19 @@ class AgentInactivityTimeoutError(AgentClientError):
         super().__init__(f"Pi turn produced no RPC activity for {timeout_ms} ms")
 
 
+class AgentTurnFailedError(AgentClientError):
+    """Raised when an accepted Pi turn reaches a terminal model failure."""
+
+    def __init__(self, message: str, *, attempts: int | None = None) -> None:
+        self.attempts = attempts
+        self.detail = message
+        if attempts is None:
+            rendered = f"Pi model request failed: {message}"
+        else:
+            rendered = f"Pi model request failed after {attempts} attempts: {message}"
+        super().__init__(rendered)
+
+
 class TurnState(StrEnum):
     IDLE = "idle"
     RUNNING = "running"
@@ -101,6 +114,7 @@ class AgentClient:
         self._request_deadlines: dict[str, DeadlineHandle] = {}
         self._inactivity_deadline: DeadlineHandle | None = None
         self._turn_state = TurnState.IDLE
+        self._auto_retry_in_progress = False
         self._event_handler: RecordHandler = lambda _record: None
         self._response_handler: RecordHandler = lambda _record: None
         self._queue_cleared_handler: QueueClearedHandler = (
@@ -168,6 +182,7 @@ class AgentClient:
     def shutdown(self) -> None:
         self._cancel_all_deadlines()
         self._pending.clear()
+        self._auto_retry_in_progress = False
         self._transport.stop()
 
     def prompt(
@@ -251,10 +266,42 @@ class AgentClient:
         event_type = record.get("type")
         if event_type in {"agent_start", "turn_start"}:
             self._set_turn_state(TurnState.RUNNING)
+        elif event_type == "auto_retry_start":
+            self._auto_retry_in_progress = True
+        elif event_type == "auto_retry_end":
+            self._handle_auto_retry_end(record)
+        elif event_type == "agent_end":
+            self._handle_agent_end(record)
         elif event_type == "agent_settled":
-            self._set_turn_state(TurnState.IDLE)
+            self._auto_retry_in_progress = False
+            if self._turn_state != TurnState.FAILED:
+                self._set_turn_state(TurnState.IDLE)
         self._note_activity()
         self._event_handler(record)
+
+    def _handle_auto_retry_end(self, event: JsonObject) -> None:
+        self._auto_retry_in_progress = False
+        if event.get("success") is not False or self._turn_state == TurnState.CANCELLING:
+            return
+        attempt = event.get("attempt")
+        attempts = attempt if isinstance(attempt, int) and not isinstance(attempt, bool) else None
+        final_error = event.get("finalError")
+        detail = final_error if isinstance(final_error, str) and final_error else "Unknown model error"
+        self._set_turn_state(TurnState.FAILED)
+        self._error_handler(AgentTurnFailedError(detail, attempts=attempts))
+
+    def _handle_agent_end(self, event: JsonObject) -> None:
+        if (
+            event.get("willRetry") is not False
+            or self._auto_retry_in_progress
+            or self._turn_state in {TurnState.CANCELLING, TurnState.FAILED}
+        ):
+            return
+        detail = _terminal_agent_error(event)
+        if detail is None:
+            return
+        self._set_turn_state(TurnState.FAILED)
+        self._error_handler(AgentTurnFailedError(detail))
 
     def _on_response(self, response: JsonObject) -> None:
         request_id = response.get("id")
@@ -353,6 +400,7 @@ class AgentClient:
     def _on_transport_error(self, error: BaseException) -> None:
         self._cancel_all_deadlines()
         self._pending.clear()
+        self._auto_retry_in_progress = False
         if self._turn_state != TurnState.IDLE:
             self._set_turn_state(TurnState.FAILED)
         self._error_handler(error)
@@ -361,10 +409,12 @@ class AgentClient:
         if state == TransportState.FAILED:
             self._cancel_all_deadlines()
             self._pending.clear()
+            self._auto_retry_in_progress = False
             self._set_turn_state(TurnState.FAILED)
         elif state == TransportState.STOPPED:
             self._cancel_all_deadlines()
             self._pending.clear()
+            self._auto_retry_in_progress = False
             if self._turn_state != TurnState.FAILED:
                 self._set_turn_state(TurnState.IDLE)
         self._transport_state_handler(state)
@@ -378,6 +428,22 @@ class AgentClient:
         else:
             self._cancel_inactivity_deadline()
         self._turn_state_handler(state)
+
+
+def _terminal_agent_error(event: JsonObject) -> str | None:
+    messages = event.get("messages")
+    if not isinstance(messages, list):
+        return None
+    for message in reversed(messages):
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        if message.get("stopReason") != "error":
+            return None
+        error_message = message.get("errorMessage")
+        if isinstance(error_message, str) and error_message:
+            return error_message
+        return "Unknown model error"
+    return None
 
 
 def _require_message(message: str) -> str:
