@@ -97,6 +97,50 @@ def test_sandbox_launch_spec_matches_aios_confinement(tmp_path: Path) -> None:
     assert "not-on-the-command-line" not in "\0".join(args)
 
 
+def test_exact_session_id_is_passed_to_pi(tmp_path: Path) -> None:
+    spec = build_launch_spec(
+        AgentSettings(provider="ornith-lan", model="Ornith"),
+        working_directory=tmp_path,
+        session_id="01abc-session_1",
+    )
+
+    pi_args = spec.arguments[spec.arguments.index("--") + 1 :]
+    assert "--continue" not in pi_args
+    session_index = pi_args.index("--session")
+    assert pi_args[session_index + 1] == "01abc-session_1"
+
+
+def test_continue_latest_is_bootstrap_only(tmp_path: Path) -> None:
+    spec = build_launch_spec(
+        AgentSettings(provider="ornith-lan", model="Ornith"),
+        working_directory=tmp_path,
+        continue_latest=True,
+    )
+
+    pi_args = spec.arguments[spec.arguments.index("--") + 1 :]
+    assert "--continue" in pi_args
+    assert "--session" not in pi_args
+
+
+def test_session_id_and_continue_latest_are_mutually_exclusive(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeConfigurationError, match="cannot be requested together"):
+        build_launch_spec(
+            AgentSettings(),
+            working_directory=tmp_path,
+            session_id="01abc",
+            continue_latest=True,
+        )
+
+
+def test_invalid_session_id_is_rejected_before_argv_construction(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeConfigurationError, match="invalid Pi session id"):
+        build_launch_spec(
+            AgentSettings(),
+            working_directory=tmp_path,
+            session_id="../../escape",
+        )
+
+
 def test_prepare_runtime_paths_creates_only_hidden_pi_state(tmp_path: Path) -> None:
     paths = PiRuntimePaths.for_workspace(tmp_path)
     prepare_runtime_paths(paths)

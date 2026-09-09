@@ -23,6 +23,7 @@ from core.agent import (
     TransportState,
     TurnState,
 )
+from core.session_id import is_valid_session_id
 from core.settings import AgentSettings, AppSettings, SettingsStore
 
 TransportFactory: TypeAlias = Callable[[PiLaunchSpec, int, int], AgentTransport]
@@ -120,6 +121,7 @@ class AgentController:
         self._connection_state = ConnectionState.DISCONNECTED
         self._turn_state = TurnState.IDLE
         self._session_ready = False
+        self._requested_session_id: str | None = None
         self._requires_reconciliation = False
         self._inactivity_warning = False
         self._last_error: str | None = None
@@ -255,7 +257,14 @@ class AgentController:
         if not resolved.is_dir():
             raise AgentControllerError(f"workspace does not exist: {resolved}")
 
-        updated = replace(self._settings, workspace_root=str(resolved))
+        same_workspace = self._workspace == resolved
+        updated = replace(
+            self._settings,
+            workspace_root=str(resolved),
+            last_session_id=(
+                self._settings.last_session_id if same_workspace else None
+            ),
+        )
         self._settings_store.save(updated)
         self._settings = updated
         self._workspace = resolved
@@ -303,11 +312,14 @@ class AgentController:
         self._diagnostic_tail = ""
         self._disconnect_requested = False
         self._session_ready = False
+        self._requested_session_id = self._settings.last_session_id
         self._connection_state = ConnectionState.STARTING
         self._status_text = f"Starting {profile.label}"
         self._state_handler()
 
         try:
+            session_id = self._requested_session_id
+            continue_latest = session_id is None
             if profile.source == RuntimeProfileSource.EXISTING:
                 existing = self._existing_config
                 if existing is None or existing.sha256 is None or profile.discovered is None:
@@ -317,11 +329,15 @@ class AgentController:
                     workspace=self._workspace,
                     profile=profile.discovered,
                     expected_sha256=existing.sha256,
+                    session_id=session_id,
+                    continue_latest=continue_latest,
                 )
             else:
                 prepared = self._bootstrap.prepare(
                     self._settings.agent,
                     workspace=self._workspace,
+                    session_id=session_id,
+                    continue_latest=continue_latest,
                 )
 
             agent_settings = self._settings.agent
@@ -360,6 +376,7 @@ class AgentController:
         except BaseException as exc:
             self._transport = None
             self._client = None
+            self._requested_session_id = None
             self._fail(exc)
             raise
 
@@ -474,14 +491,14 @@ class AgentController:
             self._status_text = "Starting Pi sandbox"
         elif state == TransportState.READY:
             self._connection_state = ConnectionState.LOADING_SESSION
-            self._status_text = "Loading Pi session"
+            self._status_text = "Resolving Pi session"
             self._session_ready = False
             client = self._client
             if client is not None:
                 try:
-                    client.get_messages(self._on_history_response)
+                    client.get_state(self._on_session_state_response)
                 except BaseException as exc:
-                    self._fail(exc)
+                    self._fail_and_stop(exc)
         elif state == TransportState.STOPPING:
             self._connection_state = ConnectionState.STOPPING
             self._status_text = "Stopping Pi"
@@ -492,6 +509,7 @@ class AgentController:
                 self._status_text = "Pi process failed"
         elif state == TransportState.STOPPED:
             self._session_ready = False
+            self._requested_session_id = None
             self._active_assistant_index = None
             self._prompt_requests.clear()
             self._transport = None
@@ -525,14 +543,57 @@ class AgentController:
                 self._status_text = "Ready"
         self._state_handler()
 
+    def _on_session_state_response(self, response: dict[str, Any]) -> None:
+        if response.get("success") is not True:
+            self._fail_and_stop(AgentControllerError("Pi rejected get_state"))
+            return
+        data = response.get("data")
+        session_id = data.get("sessionId") if isinstance(data, dict) else None
+        if not is_valid_session_id(session_id):
+            self._fail_and_stop(
+                AgentControllerError("Pi returned an invalid active session id")
+            )
+            return
+
+        expected = self._requested_session_id
+        if expected is not None and session_id != expected:
+            self._fail_and_stop(
+                AgentControllerError(
+                    "Pi opened a different session than Pi_UI requested; "
+                    "history was not replaced"
+                )
+            )
+            return
+
+        if self._settings.last_session_id != session_id:
+            try:
+                updated = replace(self._settings, last_session_id=session_id)
+                self._settings_store.save(updated)
+                self._settings = updated
+            except BaseException as exc:
+                self._fail_and_stop(exc)
+                return
+
+        client = self._client
+        if client is None:
+            return
+        self._status_text = "Loading Pi session"
+        self._state_handler()
+        try:
+            client.get_messages(self._on_history_response)
+        except BaseException as exc:
+            self._fail_and_stop(exc)
+
     def _on_history_response(self, response: dict[str, Any]) -> None:
         if response.get("success") is not True:
-            self._fail(AgentControllerError("Pi rejected get_messages"))
+            self._fail_and_stop(AgentControllerError("Pi rejected get_messages"))
             return
         data = response.get("data")
         raw_messages = data.get("messages") if isinstance(data, dict) else None
         if not isinstance(raw_messages, list):
-            self._fail(AgentControllerError("Pi returned an invalid message history"))
+            self._fail_and_stop(
+                AgentControllerError("Pi returned an invalid message history")
+            )
             return
 
         loaded: list[ConversationMessage] = []
@@ -716,6 +777,13 @@ class AgentController:
         self._session_ready = False
         self._status_text = self._last_error
         self._state_handler()
+
+    def _fail_and_stop(self, error: BaseException) -> None:
+        self._fail(error)
+        client = self._client
+        if client is not None:
+            self._disconnect_requested = False
+            client.shutdown()
 
     def _append_message(self, role: str, text: str, state: MessageState) -> int:
         message = ConversationMessage(

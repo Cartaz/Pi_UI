@@ -29,7 +29,8 @@ def test_schema_three_migrates_timeout_defaults(tmp_path: Path) -> None:
 
     loaded = SettingsStore(path).load()
 
-    assert loaded.schema_version == 4
+    assert loaded.schema_version == 5
+    assert loaded.last_session_id is None
     assert loaded.agent.request_timeout_ms == 30_000
     assert loaded.agent.inactivity_timeout_ms == 180_000
 
