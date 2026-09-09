@@ -13,6 +13,7 @@ from core.agent import (
     AgentInactivityTimeoutError,
     AgentRequestTimeoutError,
     AgentTransport,
+    AgentTurnFailedError,
     DeadlineScheduler,
     DiscoveredModelProfile,
     ExistingModelsConfig,
@@ -132,6 +133,7 @@ class AgentController:
         self._messages: list[ConversationMessage] = []
         self._message_counter = 0
         self._prompt_requests: dict[str, int] = {}
+        self._active_user_index: int | None = None
         self._active_assistant_index: int | None = None
 
         self._state_handler: StateHandler = lambda: None
@@ -402,6 +404,7 @@ class AgentController:
             self._replace_message(index, state=MessageState.FAILED)
             self._fail(exc)
             raise
+        self._active_user_index = index
         self._prompt_requests[request_id] = index
         self._status_text = "Sending prompt"
         self._state_handler()
@@ -507,6 +510,7 @@ class AgentController:
         elif state == TransportState.STOPPED:
             self._session_ready = False
             self._requested_session_id = None
+            self._active_user_index = None
             self._active_assistant_index = None
             self._prompt_requests.clear()
             self._transport = None
@@ -594,6 +598,7 @@ class AgentController:
             return
 
         loaded: list[ConversationMessage] = []
+        latest_user_index: int | None = None
         for raw in raw_messages:
             if not isinstance(raw, dict):
                 continue
@@ -601,6 +606,43 @@ class AgentController:
             if role not in {"user", "assistant"}:
                 continue
             text = _message_text(raw)
+            if role == "user":
+                if not text:
+                    continue
+                loaded.append(
+                    ConversationMessage(
+                        message_id=self._next_message_id(),
+                        role=role,
+                        text=text,
+                        state=MessageState.COMPLETE,
+                    )
+                )
+                latest_user_index = len(loaded) - 1
+                continue
+
+            stop_reason = raw.get("stopReason")
+            if stop_reason == "error":
+                if latest_user_index is not None:
+                    loaded[latest_user_index] = replace(
+                        loaded[latest_user_index],
+                        state=MessageState.FAILED,
+                    )
+                if text:
+                    loaded.append(
+                        ConversationMessage(
+                            message_id=self._next_message_id(),
+                            role=role,
+                            text=text,
+                            state=MessageState.FAILED,
+                        )
+                    )
+                continue
+
+            if latest_user_index is not None and stop_reason != "toolUse":
+                loaded[latest_user_index] = replace(
+                    loaded[latest_user_index],
+                    state=MessageState.COMPLETE,
+                )
             if not text:
                 continue
             loaded.append(
@@ -612,6 +654,8 @@ class AgentController:
                 )
             )
         self._messages = loaded
+        self._active_user_index = None
+        self._active_assistant_index = None
         self._messages_reset_handler(tuple(self._messages))
         self._session_ready = True
         self._requires_reconciliation = False
@@ -634,6 +678,8 @@ class AgentController:
             self._status_text = "Prompt accepted"
         else:
             self._replace_message(index, state=MessageState.FAILED)
+            if self._active_user_index == index:
+                self._active_user_index = None
             self._last_error = _response_error(response) or "Pi rejected the prompt"
             self._status_text = self._last_error
         self._state_handler()
@@ -677,7 +723,13 @@ class AgentController:
             self._status_text = self._last_error
             self._state_handler()
         elif event_type == "agent_settled":
-            if self._active_assistant_index is not None:
+            if self._turn_state != TurnState.FAILED and self._active_user_index is not None:
+                self._replace_message(
+                    self._active_user_index,
+                    state=MessageState.COMPLETE,
+                )
+                self._active_user_index = None
+            if self._turn_state != TurnState.FAILED and self._active_assistant_index is not None:
                 self._replace_message(
                     self._active_assistant_index,
                     state=MessageState.COMPLETE,
@@ -726,6 +778,8 @@ class AgentController:
             index = self._prompt_requests.pop(error.request_id, None)
             if index is not None and 0 <= index < len(self._messages):
                 self._replace_message(index, state=MessageState.UNCERTAIN)
+                if self._active_user_index == index:
+                    self._active_user_index = None
             self._requires_reconciliation = True
             self._inactivity_warning = False
             self._last_error = (
@@ -765,7 +819,20 @@ class AgentController:
         self._last_error = None
 
     def _on_client_error(self, error: BaseException) -> None:
+        if isinstance(error, AgentTurnFailedError):
+            self._mark_active_turn_failed()
         self._fail(error)
+
+    def _mark_active_turn_failed(self) -> None:
+        user_index = self._active_user_index
+        self._active_user_index = None
+        if user_index is not None and 0 <= user_index < len(self._messages):
+            self._replace_message(user_index, state=MessageState.FAILED)
+
+        assistant_index = self._active_assistant_index
+        self._active_assistant_index = None
+        if assistant_index is not None and 0 <= assistant_index < len(self._messages):
+            self._replace_message(assistant_index, state=MessageState.FAILED)
 
     def _fail(self, error: BaseException) -> None:
         self._inactivity_warning = False

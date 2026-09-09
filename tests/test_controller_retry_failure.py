@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from controllers.agent_controller import AgentController, ConnectionState, MessageState
+from core.agent import TurnState
 from core.agent.runtime import PiLaunchSpec
 from core.agent.transport import TransportState
 from core.settings import AppSettings, SettingsStore
@@ -80,7 +81,7 @@ def test_terminal_retry_failure_never_returns_controller_to_ready(tmp_path: Path
 
     controller.connect_agent()
     transport = _transport(harness)
-    _hydrate_empty_session(transport, session_id="01retryfailure")
+    _hydrate_session(transport, session_id="01retryfailure", messages=[])
     assert controller.connection_state == ConnectionState.READY
 
     controller.send_message("work while server is down")
@@ -135,6 +136,7 @@ def test_terminal_retry_failure_never_returns_controller_to_ready(tmp_path: Path
     assert controller.connection_state == ConnectionState.FAILED
     assert controller.can_send is False
     assert controller.can_disconnect is True
+    assert controller.messages[-1].state == MessageState.FAILED
     assert controller.last_error is not None
     assert "after 3 attempts" in controller.last_error
     assert "ECONNREFUSED" in controller.last_error
@@ -144,12 +146,89 @@ def test_terminal_retry_failure_never_returns_controller_to_ready(tmp_path: Path
     assert controller.connection_state == ConnectionState.FAILED
     assert controller.can_send is False
     assert controller.can_disconnect is True
+    assert controller.messages[-1].state == MessageState.FAILED
     assert controller.last_error is not None
     assert "ECONNREFUSED" in controller.last_error
     assert sum(item.get("type") == "prompt" for item in transport.sent) == 1
 
 
-def _hydrate_empty_session(transport: FakeTransport, *, session_id: str) -> None:
+def test_explicit_reconnect_after_terminal_failure_restores_send_ready(
+    tmp_path: Path,
+) -> None:
+    _write_profile(tmp_path)
+    harness = Harness()
+    controller = AgentController(
+        SettingsStore(tmp_path / "settings.json"),
+        harness.factory,
+        settings=AppSettings(workspace_root=str(tmp_path)),
+    )
+
+    controller.connect_agent()
+    first = _transport(harness)
+    _hydrate_session(first, session_id="01recoverable", messages=[])
+
+    controller.send_message("failed accepted prompt")
+    prompt = first.sent[-1]
+    first.emit({"type": "agent_start"})
+    first.emit(
+        {
+            "id": prompt["id"],
+            "type": "response",
+            "command": "prompt",
+            "success": True,
+        }
+    )
+    first.emit(
+        {
+            "type": "auto_retry_end",
+            "success": False,
+            "attempt": 3,
+            "finalError": "server unavailable",
+        }
+    )
+    first.emit({"type": "agent_settled"})
+
+    assert controller.connection_state == ConnectionState.FAILED
+    assert controller.turn_state == TurnState.FAILED
+    assert controller.can_send is False
+    assert controller.messages[-1].state == MessageState.FAILED
+
+    controller.disconnect_agent()
+    assert controller.connection_state == ConnectionState.DISCONNECTED
+
+    controller.connect_agent()
+    second = _transport(harness)
+    assert second is not first
+    assert controller.turn_state == TurnState.IDLE
+    _hydrate_session(
+        second,
+        session_id="01recoverable",
+        messages=[
+            {"role": "user", "content": "failed accepted prompt"},
+            {
+                "role": "assistant",
+                "content": [],
+                "stopReason": "error",
+                "errorMessage": "server unavailable",
+            },
+        ],
+    )
+
+    assert controller.connection_state == ConnectionState.READY
+    assert controller.turn_state == TurnState.IDLE
+    assert controller.can_send is True
+    assert len(controller.messages) == 1
+    assert controller.messages[0].text == "failed accepted prompt"
+    assert controller.messages[0].state == MessageState.FAILED
+    assert [item["type"] for item in second.sent] == ["get_state", "get_messages"]
+
+
+def _hydrate_session(
+    transport: FakeTransport,
+    *,
+    session_id: str,
+    messages: list[dict[str, Any]],
+) -> None:
     state = transport.sent[-1]
     assert state["type"] == "get_state"
     transport.emit(
@@ -172,7 +251,7 @@ def _hydrate_empty_session(transport: FakeTransport, *, session_id: str) -> None
             "type": "response",
             "command": "get_messages",
             "success": True,
-            "data": {"messages": []},
+            "data": {"messages": messages},
         }
     )
 

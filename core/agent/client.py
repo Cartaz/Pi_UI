@@ -177,6 +177,7 @@ class AgentClient:
         self._inactivity_timeout_handler = handler
 
     def start(self) -> None:
+        self._turn_state_handler(self._turn_state)
         self._transport.start()
 
     def shutdown(self) -> None:
