@@ -5,7 +5,12 @@ from typing import Any
 
 import pytest
 
-from core.agent.client import AgentClient, AgentClientError, TurnState
+from core.agent.client import (
+    AgentClient,
+    AgentClientError,
+    AgentTurnFailedError,
+    TurnState,
+)
 from core.agent.transport import TransportState
 
 
@@ -93,12 +98,170 @@ def test_prompt_response_acceptance_is_not_turn_completion() -> None:
     assert client.pending_request_ids == ()
     assert responses[-1]["success"] is True
 
-    transport.emit_record({"type": "agent_end", "messages": []})
+    transport.emit_record({"type": "agent_end", "messages": [], "willRetry": False})
     assert client.turn_state == TurnState.RUNNING
 
     transport.emit_record({"type": "agent_settled"})
     assert client.turn_state == TurnState.IDLE
     assert states == [TurnState.RUNNING, TurnState.IDLE]
+
+
+def test_terminal_retry_failure_stays_failed_after_agent_settled() -> None:
+    transport = FakeTransport()
+    client = AgentClient(transport, id_factory=id_sequence())
+    errors: list[BaseException] = []
+    states: list[TurnState] = []
+    client.set_error_handler(errors.append)
+    client.set_turn_state_handler(states.append)
+    client.start()
+
+    client.prompt("hello")
+    transport.emit_record({"type": "agent_start"})
+    transport.emit_record(
+        {
+            "id": "req-1",
+            "type": "response",
+            "command": "prompt",
+            "success": True,
+        }
+    )
+    transport.emit_record(
+        {
+            "type": "agent_end",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [],
+                    "stopReason": "error",
+                    "errorMessage": "connection refused",
+                }
+            ],
+            "willRetry": True,
+        }
+    )
+    transport.emit_record(
+        {
+            "type": "auto_retry_start",
+            "attempt": 1,
+            "maxAttempts": 3,
+            "delayMs": 100,
+            "errorMessage": "connection refused",
+        }
+    )
+    transport.emit_record(
+        {
+            "type": "agent_end",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [],
+                    "stopReason": "error",
+                    "errorMessage": "connection refused",
+                }
+            ],
+            "willRetry": False,
+        }
+    )
+    assert client.turn_state == TurnState.RUNNING
+
+    transport.emit_record(
+        {
+            "type": "auto_retry_end",
+            "success": False,
+            "attempt": 3,
+            "finalError": "ECONNREFUSED 192.0.2.1:8080",
+        }
+    )
+
+    assert client.turn_state == TurnState.FAILED
+    assert len(errors) == 1
+    assert isinstance(errors[0], AgentTurnFailedError)
+    assert errors[0].attempts == 3
+    assert "after 3 attempts" in str(errors[0])
+    assert "ECONNREFUSED" in str(errors[0])
+
+    transport.emit_record({"type": "agent_settled"})
+
+    assert client.turn_state == TurnState.FAILED
+    assert states == [TurnState.RUNNING, TurnState.FAILED]
+
+
+def test_non_retryable_agent_error_is_terminal() -> None:
+    transport = FakeTransport()
+    client = AgentClient(transport, id_factory=id_sequence())
+    errors: list[BaseException] = []
+    client.set_error_handler(errors.append)
+    client.start()
+
+    transport.emit_record({"type": "agent_start"})
+    transport.emit_record(
+        {
+            "type": "agent_end",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [],
+                    "stopReason": "error",
+                    "errorMessage": "invalid request",
+                }
+            ],
+            "willRetry": False,
+        }
+    )
+    transport.emit_record({"type": "agent_settled"})
+
+    assert client.turn_state == TurnState.FAILED
+    assert len(errors) == 1
+    assert isinstance(errors[0], AgentTurnFailedError)
+    assert errors[0].attempts is None
+    assert "invalid request" in str(errors[0])
+
+
+def test_retry_cancellation_during_explicit_stop_is_not_terminal_failure() -> None:
+    transport = FakeTransport()
+    client = AgentClient(transport, id_factory=id_sequence())
+    errors: list[BaseException] = []
+    client.set_error_handler(errors.append)
+    client.start()
+
+    transport.emit_record({"type": "agent_start"})
+    transport.emit_record(
+        {
+            "type": "auto_retry_start",
+            "attempt": 1,
+            "maxAttempts": 3,
+            "delayMs": 100,
+            "errorMessage": "temporary outage",
+        }
+    )
+    client.request_stop()
+    assert client.turn_state == TurnState.CANCELLING
+
+    transport.emit_record(
+        {
+            "type": "auto_retry_end",
+            "success": False,
+            "attempt": 1,
+            "finalError": "Retry cancelled",
+        }
+    )
+    transport.emit_record(
+        {
+            "type": "agent_end",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [],
+                    "stopReason": "aborted",
+                }
+            ],
+            "willRetry": False,
+        }
+    )
+    transport.emit_record({"type": "agent_settled"})
+
+    assert client.turn_state == TurnState.IDLE
+    assert errors == []
 
 
 def test_get_messages_is_correlated_and_callback_receives_response() -> None:
