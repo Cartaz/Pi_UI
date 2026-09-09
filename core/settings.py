@@ -12,6 +12,7 @@ from typing import Any, Final
 from urllib.parse import urlsplit
 
 from core.atomic_file import atomic_write_text, fsync_directory
+from core.session_id import is_valid_session_id
 
 APP_DIR_NAME: Final = "pi-ui"
 CURRENT_SCHEMA_VERSION: Final = 5
@@ -24,9 +25,6 @@ SUPPORTED_MODEL_APIS: Final = frozenset(
     }
 )
 _ENV_NAME_RE: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_SESSION_ID_RE: Final = re.compile(
-    r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$"
-)
 
 
 class SettingsError(RuntimeError):
@@ -232,13 +230,10 @@ def _parse_settings(raw: Any) -> AppSettings:
             )
 
     last_session_id = raw.get("last_session_id")
-    if last_session_id is not None:
-        if not isinstance(last_session_id, str) or not _SESSION_ID_RE.fullmatch(
-            last_session_id
-        ):
-            raise SettingsValidationError(
-                "last_session_id contains characters Pi does not allow"
-            )
+    if last_session_id is not None and not is_valid_session_id(last_session_id):
+        raise SettingsValidationError(
+            "last_session_id contains characters Pi does not allow"
+        )
 
     agent_raw = raw.get("agent", {})
     if not isinstance(agent_raw, dict):
