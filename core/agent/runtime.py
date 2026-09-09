@@ -122,11 +122,17 @@ def _build_sanitized_environment(
         path = f"{settings.runtime_root}/bin:/usr/bin:/bin"
         agent_dir = str(paths.sandbox_agent_dir)
         session_dir = str(paths.sandbox_session_dir)
+        identity_environment = {
+            "USER": "aios",
+            "LOGNAME": "aios",
+            "TMPDIR": "/tmp",
+        }
     else:
         home = base_environment.get("HOME", str(Path.home()))
         path = base_environment.get("PATH", "/usr/bin:/bin")
         agent_dir = str(paths.host_agent_dir)
         session_dir = str(paths.host_session_dir)
+        identity_environment = {}
 
     env = {
         "HOME": home,
@@ -134,6 +140,8 @@ def _build_sanitized_environment(
         "LANG": base_environment.get("LANG", "C.UTF-8"),
         "PI_CODING_AGENT_DIR": agent_dir,
         "PI_CODING_AGENT_SESSION_DIR": session_dir,
+        "PI_TELEMETRY": "0",
+        **identity_environment,
     }
 
     if settings.skip_version_check:
