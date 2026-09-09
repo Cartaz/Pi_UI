@@ -29,13 +29,15 @@ Questo documento registra evidenze incrementali della milestone M0 distinguendo 
 ### RPC, stato, sessione e lifecycle
 
 - JSONL LF stretto, correlazione request ID, prompt/steer/follow-up, `get_state`, `get_messages`, stato turno e stop `clear_queue → abort`.
-- ACK prompt distinto dal completamento; `agent_settled` riporta il turno a idle.
+- ACK prompt distinto dal completamento; `agent_settled` riporta il turno a idle soltanto quando il turno non è già in failure terminale.
 - Deadline RPC senza retry automatico; prompt ACK timeout → outcome `uncertain` e blocco nuovi invii fino a riconciliazione.
 - Watchdog inattività non distruttivo.
 - `QProcessAgentTransport` asincrono con stderr separato e shutdown `terminate()` → `kill()` temporizzato.
 - `AppShutdownCoordinator` mantiene vivo l'event loop durante lo shutdown e ha un watchdog finale.
 - Session ownership schema 6: se Pi_UI non ha ancora un proprio `last_session_id`, avvia Pi senza `--continue` e senza `--session`, quindi acquisisce via `get_state` il nuovo `sessionId` autorevole e lo persiste. Reconnect/restart successivi usano `--session <id>` esplicito. Pi_UI verifica l'identità della sessione prima di caricare `get_messages` e fallisce chiuso se Pi apre una sessione diversa.
 - Il supporto low-level a `continue_latest` resta una capacità esplicita del runtime Pi, ma non è usato automaticamente dal controller. Un'eventuale futura adozione/importazione di sessioni esistenti dovrà essere un'azione utente esplicita.
+- Failure modello dopo prompt accettato: `auto_retry_end(success=false)` viene trattato come terminale, conserva `attempt/finalError`, porta il turno in `FAILED` e non permette al successivo `agent_settled` di tornare silenziosamente `Ready`. Gli errori non retryable sono riconosciuti da `agent_end(willRetry=false)` + assistant `stopReason=error`. Stop/cancellazione esplicita non viene classificata come model failure.
+- Nessun replay automatico dopo failure terminale: recovery esplicita tramite Disconnect/Reconnect della stessa sessione.
 
 ### Prima shell Qt Quick
 
@@ -73,7 +75,7 @@ Prove osservate:
 1. installazione editable su Python 3.14.7: riuscita;
 2. `compileall`: PASS;
 3. `qmllint --max-warnings 0`: PASS;
-4. pytest locale: **134 passed** sulla build M0 precedente ai fix sessione;
+4. pytest locale: **134 passed** sulla build M0 precedente ai fix sessione/failure;
 5. Host checks GUI: **Blocking 0, Warnings 1, Pending target gate 1**; unico warning previsto `--share-net`;
 6. Sandbox gate GUI reale: **Passed 11, Failed 0**;
 7. Pi → Ornith LAN: PASS;
@@ -85,9 +87,11 @@ Prove osservate:
 13. Disconnect: i processi Bubblewrap/Pi_UI sono terminati; i soli processi rimasti appartenevano a una sessione `pi-aios` indipendente già esistente: PASS;
 14. reconnect processo/modello sulla prima build: PASS (`RECONNECT_OK`), ma la cronologia è sparita perché veniva creata una nuova sessione: bug riprodotto;
 15. folder picker KDE dopo il fix #14: entrando in `AI_OS` e confermando la cartella, Pi_UI seleziona correttamente `/home/francesco/AI_OS`: PASS;
-16. primo Connect della build schema-5 session-resume con un altro `pi-aios` concorrente: Pi `--continue` ha adottato la sessione attiva/più recente dell'altro agente invece di crearne una Pi_UI. Nessun nuovo messaggio è stato inviato; l'utente ha disconnesso. **Bug riprodotto sul target**, issue #15.
-
-Il punto 16 motiva schema 6: ogni puntatore schema-5 viene invalidato e il primo bootstrap Pi_UI torna ad essere una sessione nuova, mentre i reconnect successivi restano pin all'ID esatto.
+16. primo Connect della build schema-5 session-resume con un altro `pi-aios` concorrente: Pi `--continue` ha adottato la sessione attiva/più recente dell'altro agente invece di crearne una Pi_UI. Nessun nuovo messaggio è stato inviato; l'utente ha disconnesso. Bug riprodotto, poi corretto con schema 6;
+17. schema 6 sul target, mantenendo un altro `pi-aios` attivo: primo Connect Pi_UI apre una sessione nuova e propria, `PI_UI_OWN_SESSION_OK` passa, Disconnect → Connect conserva la cronologia: PASS;
+18. chiusura completa della GUI con Pi connesso: processo Pi_UI presente prima della chiusura, nessun orphan dopo, riapertura app + Connect conserva la stessa cronologia: PASS;
+19. server llama.cpp intenzionalmente spento: GUI resta reattiva e Pi esegue 3 retry, senza replay automatico del prompt; **FAILURE UX riprodotto** sulla build precedente perché dopo il retry terminale Pi_UI non mostrava `finalError` e tornava `Ready`. Issue #17 / PR #18 correggono il lifecycle;
+20. dopo riaccensione server + reconnect, il modello ha risposto ma non ha rispettato il marker `SERVER_RECOVERED`: il failed user turn era correttamente ancora nella sessione e il modello ha interpretato le due richieste come prompt injection. Questo non dimostra replay; il recovery funzionale va ritestato dopo il fix #17 con un prompt neutro e verificando separatamente l'assenza di replay.
 
 ## Evidenze CI osservate
 
@@ -98,7 +102,7 @@ GitHub Actions esegue su Python **3.12, 3.13 e 3.14**:
 3. `pyside6-qmllint --max-warnings 0 -I ui/qml ui/qml/PiUI/*.qml`;
 4. `python -m pytest` con `QT_QPA_PLATFORM=offscreen`.
 
-PR #13 session-resume e PR #14 folder-picker hanno osservato questi step verdi su tutte e tre le versioni. La suite copre pin `--session <id>`, persistenza/restart, mismatch sessione fail-closed, QML e sandbox/lifecycle. La PR schema-6 aggiunge il caso in cui una sessione estranea è già presente nel directory condiviso e verifica che il primo Connect non usi né `--continue` né `--session`.
+PR #13 session-resume, PR #14 folder-picker e PR #16 session ownership hanno osservato questi step verdi su tutte e tre le versioni. La suite copre pin `--session <id>`, persistenza/restart, mismatch sessione fail-closed, QML e sandbox/lifecycle. La PR #18 aggiunge failure terminale da retry/non-retryable, latch attraverso `agent_settled`, cancellazione esplicita e proiezione controller non-sendable senza replay.
 
 ## Contratti upstream Pi usati
 
@@ -110,8 +114,9 @@ La documentazione/codice upstream corrente confermano:
 - `--continue` continua la sessione più recente o ne crea una se non esiste;
 - `--session <path|id>` apre una sessione specifica e fallisce se non viene trovata;
 - `--session-dir`, `PI_CODING_AGENT_SESSION_DIR` e `PI_CODING_AGENT_DIR` isolano lo storage;
-- ACK prompt distinto dal completamento;
-- `agent_settled` dopo retry/compattazione/continuazioni automatiche;
+- ACK prompt distinto dal completamento; i failure successivi all'ACK sono eventi/message stream, non una seconda response dello stesso request ID;
+- `auto_retry_start` descrive i retry automatici e `auto_retry_end(success=false)` espone `attempt` e `finalError` al termine dei tentativi;
+- `agent_end` espone `willRetry`; `agent_settled` arriva solo quando Pi non continuerà automaticamente dopo retry/compattazione/continuazioni;
 - `clear_queue` prima di `abort` per stop interattivo;
 - estensioni, skill, prompt template e package sono primitive upstream da esporre senza forkare Pi.
 
@@ -133,13 +138,11 @@ Riferimenti primari:
 
 ## Lavoro M0 ancora aperto
 
-### Richiede retest target dopo schema 6
+### Richiede retest target dopo PR #18
 
-- Pull della build con schema 6.
-- Con un altro `pi-aios` ancora attivo, verificare che il **primo Connect Pi_UI apra una conversazione nuova**, non quella dell'altro agente.
-- Inviare un marker nella nuova sessione e verificare **Disconnect → Connect mantenendo la stessa cronologia**.
-- Chiudere completamente l'app con Pi connesso, verificare assenza di orphan, riaprire e verificare la stessa cronologia.
-- Verificare server Ornith down/error e recovery senza replay o freeze.
+- Pull della build con failure terminale corretto.
+- Spegnere llama.cpp durante un prompt e verificare: retry visibili, errore finale visibile, composer bloccato, nessun ritorno silenzioso a Ready, nessun replay automatico.
+- Riaccendere server, Disconnect → Connect sulla stessa sessione e inviare un prompt neutro (non un marker imperativo) per distinguere recovery del runtime da comportamento del modello sul failed-turn context.
 - Eseguire almeno tre reconnect/riavvii consecutivi dopo il pin dell'ID.
 - Verifica grafica/focus finale su KDE/Wayland.
 
@@ -148,7 +151,8 @@ Riferimenti primari:
 - Reasoning stream non ancora proiettato in UI benché Pi RPC esponga `thinking_*`; issue #9.
 - Metriche grounded token/timing/tok/s; issue #10.
 - Copia esplicita messaggi user/assistant; issue #11.
+- Il failed user turn resta nel contesto Pi dopo un model failure; non viene cancellato o riscritto implicitamente. Una futura UX di retry/branch/rollback deve essere esplicita, non una mutazione automatica della cronologia.
 
-Folder picker KDE issue #8 è stata corretta e verificata sul target.
+Folder picker KDE issue #8 e session ownership issue #15 sono state corrette e verificate sul target.
 
-M0 resta **in corso** fino al retest reale dello schema 6, shutdown/restart e server recovery.
+M0 resta **in corso** fino al retest reale del terminal retry failure, recovery e giro finale di reconnect/focus.
