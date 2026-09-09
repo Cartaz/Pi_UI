@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 from core.atomic_file import atomic_write_text, fsync_directory
 
 APP_DIR_NAME: Final = "pi-ui"
-CURRENT_SCHEMA_VERSION: Final = 4
+CURRENT_SCHEMA_VERSION: Final = 5
 SUPPORTED_MODEL_APIS: Final = frozenset(
     {
         "openai-completions",
@@ -24,6 +24,9 @@ SUPPORTED_MODEL_APIS: Final = frozenset(
     }
 )
 _ENV_NAME_RE: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_SESSION_ID_RE: Final = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$"
+)
 
 
 class SettingsError(RuntimeError):
@@ -82,6 +85,7 @@ class AgentSettings:
 class AppSettings:
     schema_version: int = CURRENT_SCHEMA_VERSION
     workspace_root: str | None = None
+    last_session_id: str | None = None
     agent: AgentSettings = field(default_factory=AgentSettings)
 
 
@@ -168,7 +172,7 @@ def _migrate_settings(raw: Any) -> dict[str, Any]:
     version = raw.get("schema_version", 1)
     if version == CURRENT_SCHEMA_VERSION:
         return dict(raw)
-    if version not in {1, 2, 3}:
+    if version not in {1, 2, 3, 4}:
         raise SettingsValidationError(
             f"unsupported settings schema version: {version!r}"
         )
@@ -193,6 +197,11 @@ def _migrate_settings(raw: Any) -> dict[str, Any]:
     agent.setdefault("request_timeout_ms", defaults.request_timeout_ms)
     agent.setdefault("inactivity_timeout_ms", defaults.inactivity_timeout_ms)
 
+    # Schema 5 persists the exact Pi session selected for the active workspace.
+    # Existing installations intentionally start with no pointer and bootstrap
+    # through Pi's --continue behavior once before capturing the authoritative ID.
+    migrated.setdefault("last_session_id", None)
+
     migrated["agent"] = agent
     migrated["schema_version"] = CURRENT_SCHEMA_VERSION
     return migrated
@@ -202,7 +211,7 @@ def _parse_settings(raw: Any) -> AppSettings:
     if not isinstance(raw, dict):
         raise SettingsValidationError("settings root must be a JSON object")
 
-    allowed_root = {"schema_version", "workspace_root", "agent"}
+    allowed_root = {"schema_version", "workspace_root", "last_session_id", "agent"}
     unknown_root = set(raw) - allowed_root
     if unknown_root:
         raise SettingsValidationError(
@@ -222,6 +231,15 @@ def _parse_settings(raw: Any) -> AppSettings:
                 "workspace_root must be a non-empty string or null"
             )
 
+    last_session_id = raw.get("last_session_id")
+    if last_session_id is not None:
+        if not isinstance(last_session_id, str) or not _SESSION_ID_RE.fullmatch(
+            last_session_id
+        ):
+            raise SettingsValidationError(
+                "last_session_id contains characters Pi does not allow"
+            )
+
     agent_raw = raw.get("agent", {})
     if not isinstance(agent_raw, dict):
         raise SettingsValidationError("agent settings must be a JSON object")
@@ -230,6 +248,7 @@ def _parse_settings(raw: Any) -> AppSettings:
     return AppSettings(
         schema_version=CURRENT_SCHEMA_VERSION,
         workspace_root=workspace_root,
+        last_session_id=last_session_id,
         agent=agent,
     )
 
