@@ -74,6 +74,7 @@ class TransportHarness:
     def __init__(self) -> None:
         self.transport: FakeTransport | None = None
         self.launch_spec: PiLaunchSpec | None = None
+        self.launch_specs: list[PiLaunchSpec] = []
         self.timeouts: tuple[int, int] | None = None
 
     def factory(
@@ -83,6 +84,7 @@ class TransportHarness:
         shutdown_timeout_ms: int,
     ) -> FakeTransport:
         self.launch_spec = launch_spec
+        self.launch_specs.append(launch_spec)
         self.timeouts = (startup_timeout_ms, shutdown_timeout_ms)
         self.transport = FakeTransport()
         return self.transport
@@ -104,6 +106,9 @@ def test_existing_baseline_connects_loads_history_and_streams_reply(
     controller.connect_agent()
     transport = _transport(harness)
     assert controller.connection_state == ConnectionState.LOADING_SESSION
+    assert _pi_arguments(harness.launch_specs[-1]).count("--continue") == 1
+    assert transport.sent[-1]["type"] == "get_state"
+    _emit_session_state(transport, session_id="01session")
     assert transport.sent[-1]["type"] == "get_messages"
     history_id = transport.sent[-1]["id"]
     transport.emit(
@@ -127,6 +132,7 @@ def test_existing_baseline_connects_loads_history_and_streams_reply(
 
     assert controller.connection_state == ConnectionState.READY
     assert controller.can_send is True
+    assert controller.settings.last_session_id == "01session"
     assert [(m.role, m.text) for m in controller.messages] == [
         ("user", "Earlier question"),
         ("assistant", "Earlier answer"),
@@ -189,6 +195,122 @@ def test_existing_baseline_connects_loads_history_and_streams_reply(
     assert harness.launch_spec is not None
     assert harness.launch_spec.executable == "/usr/bin/bwrap"
     assert harness.timeouts == (10_000, 5_000)
+
+
+def test_disconnect_reconnect_uses_exact_captured_session_and_restores_history(
+    tmp_path: Path,
+) -> None:
+    _write_existing_profile(tmp_path)
+    harness = TransportHarness()
+    controller = _controller(tmp_path, harness)
+    _connect_empty(controller, harness, session_id="01stable")
+
+    first_args = _pi_arguments(harness.launch_specs[0])
+    assert "--continue" in first_args
+    assert "--session" not in first_args
+
+    controller.disconnect_agent()
+    controller.connect_agent()
+    transport = _transport(harness)
+    second_args = _pi_arguments(harness.launch_specs[1])
+    assert "--continue" not in second_args
+    session_index = second_args.index("--session")
+    assert second_args[session_index + 1] == "01stable"
+
+    _emit_session_state(transport, session_id="01stable")
+    history = transport.sent[-1]
+    assert history["type"] == "get_messages"
+    transport.emit(
+        {
+            "id": history["id"],
+            "type": "response",
+            "command": "get_messages",
+            "success": True,
+            "data": {
+                "messages": [
+                    {"role": "user", "content": "Persist me"},
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "Persisted"}],
+                    },
+                ]
+            },
+        }
+    )
+
+    assert controller.connection_state == ConnectionState.READY
+    assert [(item.role, item.text) for item in controller.messages] == [
+        ("user", "Persist me"),
+        ("assistant", "Persisted"),
+    ]
+
+
+def test_app_restart_uses_persisted_exact_session_id(tmp_path: Path) -> None:
+    _write_existing_profile(tmp_path)
+    store = SettingsStore(tmp_path / "app-settings.json")
+    first_harness = TransportHarness()
+    first = AgentController(
+        store,
+        first_harness.factory,
+        settings=AppSettings(workspace_root=str(tmp_path)),
+    )
+    _connect_empty(first, first_harness, session_id="01restart")
+    first.disconnect_agent()
+
+    second_harness = TransportHarness()
+    restarted = AgentController(store, second_harness.factory)
+    restarted.connect_agent()
+
+    args = _pi_arguments(second_harness.launch_specs[-1])
+    assert "--continue" not in args
+    session_index = args.index("--session")
+    assert args[session_index + 1] == "01restart"
+
+
+def test_session_identity_mismatch_fails_closed_and_stops_pi(tmp_path: Path) -> None:
+    _write_existing_profile(tmp_path)
+    harness = TransportHarness()
+    store = SettingsStore(tmp_path / "app-settings.json")
+    controller = AgentController(
+        store,
+        harness.factory,
+        settings=AppSettings(
+            workspace_root=str(tmp_path),
+            last_session_id="01expected",
+        ),
+    )
+
+    controller.connect_agent()
+    transport = _transport(harness)
+    _emit_session_state(transport, session_id="01different")
+
+    assert transport.state == TransportState.STOPPED
+    assert controller.connection_state == ConnectionState.FAILED
+    assert controller.can_connect is True
+    assert controller.last_error is not None
+    assert "different session" in controller.last_error
+    assert controller.messages == ()
+
+
+def test_changing_workspace_clears_captured_session_pointer(tmp_path: Path) -> None:
+    _write_existing_profile(tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    harness = TransportHarness()
+    store = SettingsStore(tmp_path / "app-settings.json")
+    controller = AgentController(
+        store,
+        harness.factory,
+        settings=AppSettings(
+            workspace_root=str(tmp_path),
+            last_session_id="01old",
+        ),
+    )
+
+    controller.set_workspace(other)
+
+    assert controller.settings.last_session_id is None
+    assert store.load().last_session_id is None
 
 
 def test_prompt_rejection_marks_only_local_user_message_failed(tmp_path: Path) -> None:
@@ -325,7 +447,7 @@ def test_configured_settings_profile_can_bootstrap_new_workspace(tmp_path: Path)
     controller.connect_agent()
 
     assert (tmp_path / ".pi-agent/models.json").is_file()
-    assert _transport(harness).sent[-1]["type"] == "get_messages"
+    assert _transport(harness).sent[-1]["type"] == "get_state"
 
 
 def _controller(tmp_path: Path, harness: TransportHarness) -> AgentController:
@@ -334,14 +456,22 @@ def _controller(tmp_path: Path, harness: TransportHarness) -> AgentController:
     return AgentController(store, harness.factory, settings=settings)
 
 
-def _connect_empty(controller: AgentController, harness: TransportHarness) -> None:
+def _connect_empty(
+    controller: AgentController,
+    harness: TransportHarness,
+    *,
+    session_id: str = "01session",
+) -> None:
     controller.connect_agent()
     transport = _transport(harness)
-    request = transport.sent[-1]
-    assert request["type"] == "get_messages"
+    state = transport.sent[-1]
+    assert state["type"] == "get_state"
+    _emit_session_state(transport, session_id=session_id)
+    history = transport.sent[-1]
+    assert history["type"] == "get_messages"
     transport.emit(
         {
-            "id": request["id"],
+            "id": history["id"],
             "type": "response",
             "command": "get_messages",
             "success": True,
@@ -349,6 +479,28 @@ def _connect_empty(controller: AgentController, harness: TransportHarness) -> No
         }
     )
     assert controller.connection_state == ConnectionState.READY
+
+
+def _emit_session_state(transport: FakeTransport, *, session_id: str) -> None:
+    request = transport.sent[-1]
+    assert request["type"] == "get_state"
+    transport.emit(
+        {
+            "id": request["id"],
+            "type": "response",
+            "command": "get_state",
+            "success": True,
+            "data": {
+                "sessionId": session_id,
+                "sessionFile": f"/workspace/.pi-agent/sessions/{session_id}.jsonl",
+            },
+        }
+    )
+
+
+def _pi_arguments(spec: PiLaunchSpec) -> tuple[str, ...]:
+    separator = spec.arguments.index("--")
+    return spec.arguments[separator + 1 :]
 
 
 def _transport(harness: TransportHarness) -> FakeTransport:
