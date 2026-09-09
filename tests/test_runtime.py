@@ -84,12 +84,16 @@ def test_sandbox_launch_spec_matches_aios_confinement(tmp_path: Path) -> None:
         "LANG": "it_IT.UTF-8",
         "PI_CODING_AGENT_DIR": "/workspace/.pi-agent",
         "PI_CODING_AGENT_SESSION_DIR": "/workspace/.pi-agent/sessions",
+        "PI_TELEMETRY": "0",
+        "USER": "aios",
+        "LOGNAME": "aios",
+        "TMPDIR": "/tmp",
         "PI_SKIP_VERSION_CHECK": "1",
         secret_name: "not-on-the-command-line",
     }
     assert "SSH_AUTH_SOCK" not in spec.environment
     assert "DISPLAY" not in spec.environment
-    assert "USER" not in spec.environment
+    assert spec.environment["USER"] != "tester"
     assert "not-on-the-command-line" not in "\0".join(args)
 
 
@@ -138,6 +142,7 @@ def test_direct_launch_is_explicit_and_uses_host_paths(tmp_path: Path) -> None:
     assert spec.environment["PI_CODING_AGENT_DIR"] == str(
         tmp_path.resolve() / ".pi-agent"
     )
+    assert spec.environment["PI_TELEMETRY"] == "0"
     assert spec.environment["PI_OFFLINE"] == "1"
     assert "PI_SKIP_VERSION_CHECK" not in spec.environment
 
