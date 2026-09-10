@@ -48,7 +48,7 @@ class WorkspaceBrowserAdapter(QObject):
         self._operation_error = ""
         try:
             self._controller.refresh()
-        except BaseException as exc:
+        except Exception as exc:
             self._operation_error = str(exc)
             self.stateChanged.emit()
 
