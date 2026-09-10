@@ -111,7 +111,10 @@ def main() -> int:
     sandbox_gate_model = PreflightListModel(sandbox_gate_controller)
     agent_adapter = AgentAdapter(controller)
     workspace_adapter = WorkspaceBrowserAdapter(workspace_browser_controller)
-    document_adapter = WorkspaceDocumentAdapter(workspace_document_controller)
+    document_adapter = WorkspaceDocumentAdapter(
+        workspace_document_controller,
+        app.clipboard().setText,
+    )
     preflight_adapter = PreflightAdapter(preflight_controller)
     sandbox_gate_adapter = SandboxGateAdapter(sandbox_gate_controller)
 
