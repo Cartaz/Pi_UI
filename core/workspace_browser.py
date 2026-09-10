@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import stat
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -52,14 +53,12 @@ def scan_directory(
     *,
     cancelled: CancelCheck | None = None,
 ) -> WorkspaceScanResult:
-    """Scan one directory without recursively traversing the workspace.
+    """Scan exactly one directory without recursively traversing the workspace.
 
-    ``relative_directory`` must name a real directory below ``root``. Symlink
-    components are rejected even when their targets remain inside the root;
-    symlink entries are deliberately leaf nodes in the first M1 browser slice.
-    This keeps host-side browsing aligned with the sandbox's confinement goal
-    and prevents an external symlink target from becoming visible through the
-    GUI.
+    Every directory component is opened by file descriptor with ``O_NOFOLLOW``
+    and ``O_DIRECTORY``. This makes symlink confinement an OS-enforced property
+    at open time rather than a path check that can be raced by another process.
+    Symlink entries remain visible leaf nodes in this first M1 browser slice.
     """
 
     try:
@@ -70,59 +69,73 @@ def scan_directory(
         return WorkspaceScanResult(relative_directory, (), "workspace root is not a directory")
 
     try:
-        directory = _resolve_child_directory(root_resolved, relative_directory)
+        parts = _relative_parts(relative_directory)
+        directory_fd = _open_directory_fd(root_resolved, parts)
     except WorkspaceBrowseError as exc:
         return WorkspaceScanResult(relative_directory, (), str(exc))
 
+    prefix = "/".join(parts)
     entries: list[WorkspaceEntry] = []
     try:
-        with os.scandir(directory) as iterator:
+        with os.scandir(directory_fd) as iterator:
             for item in iterator:
                 if cancelled is not None and cancelled():
                     return WorkspaceScanResult(relative_directory, ())
-                entries.append(_entry_from_dirent(root_resolved, item))
+                entries.append(_entry_from_dirent(prefix, item))
     except OSError as exc:
         return WorkspaceScanResult(relative_directory, (), f"cannot read directory: {exc}")
+    finally:
+        os.close(directory_fd)
 
     entries.sort(key=_entry_sort_key)
     return WorkspaceScanResult(relative_directory, tuple(entries))
 
 
-def _resolve_child_directory(root: Path, relative_directory: str) -> Path:
+def _relative_parts(relative_directory: str) -> tuple[str, ...]:
     relative = Path(relative_directory)
     if relative.is_absolute():
         raise WorkspaceBrowseError("absolute browser paths are not allowed")
-
     parts = tuple(part for part in relative.parts if part not in {"", "."})
     if any(part == ".." for part in parts):
         raise WorkspaceBrowseError("parent traversal is not allowed")
+    return parts
 
-    candidate = root
-    for part in parts:
-        candidate = candidate / part
-        try:
-            if candidate.is_symlink():
-                raise WorkspaceBrowseError("symlink directories are not traversable")
-        except OSError as exc:
-            raise WorkspaceBrowseError(f"cannot inspect directory path: {exc}") from exc
+
+def _open_directory_fd(root: Path, parts: tuple[str, ...]) -> int:
+    required_flags = ("O_DIRECTORY", "O_NOFOLLOW")
+    if any(not hasattr(os, name) for name in required_flags):
+        raise WorkspaceBrowseError("secure directory browsing is unavailable on this platform")
+
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
 
     try:
-        resolved = candidate.resolve(strict=True)
+        current_fd = os.open(root, flags)
     except OSError as exc:
-        raise WorkspaceBrowseError(f"directory unavailable: {exc}") from exc
+        raise WorkspaceBrowseError(f"workspace unavailable: {exc}") from exc
 
     try:
-        resolved.relative_to(root)
-    except ValueError as exc:
-        raise WorkspaceBrowseError("directory escapes workspace root") from exc
-    if not resolved.is_dir():
-        raise WorkspaceBrowseError("browser path is not a directory")
-    return resolved
+        for part in parts:
+            try:
+                metadata = os.stat(part, dir_fd=current_fd, follow_symlinks=False)
+                if stat.S_ISLNK(metadata.st_mode):
+                    raise WorkspaceBrowseError("symlink directories are not traversable")
+                next_fd = os.open(part, flags, dir_fd=current_fd)
+            except WorkspaceBrowseError:
+                raise
+            except OSError as exc:
+                raise WorkspaceBrowseError(f"directory path is not traversable: {exc}") from exc
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd
+    except BaseException:
+        os.close(current_fd)
+        raise
 
 
-def _entry_from_dirent(root: Path, item: os.DirEntry[str]) -> WorkspaceEntry:
-    path = Path(item.path)
-    relative_path = path.relative_to(root).as_posix()
+def _entry_from_dirent(prefix: str, item: os.DirEntry[str]) -> WorkspaceEntry:
+    relative_path = f"{prefix}/{item.name}" if prefix else item.name
     try:
         if item.is_symlink():
             kind = WorkspaceEntryKind.SYMLINK
