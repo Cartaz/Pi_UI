@@ -48,6 +48,12 @@ InsetSurface {{
 
     component = QQmlComponent(engine)
     component.setData(source.encode("utf-8"), QUrl("inmemory:/LongInset.qml"))
+    for _ in range(50):
+        if not component.isLoading():
+            break
+        app.processEvents()
+
+    assert not component.isLoading(), "inline QML component did not finish loading"
     root = component.create()
     assert root is not None, "\n".join(error.toString() for error in component.errors())
     app.processEvents()
