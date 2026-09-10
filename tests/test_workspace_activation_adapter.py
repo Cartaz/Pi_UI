@@ -72,10 +72,11 @@ def test_browser_adapter_emits_leaf_path_but_keeps_directory_activation_in_tree(
     assert runner.requests[-1][2] == "docs"
 
 
-def test_document_adapter_exposes_selection_and_exact_text(tmp_path: Path) -> None:
+def test_document_adapter_exposes_exact_source_and_normalized_rendering(tmp_path: Path) -> None:
     runner = DocumentRunner()
     controller = WorkspaceDocumentController(lambda: tmp_path, runner)
-    adapter = WorkspaceDocumentAdapter(controller)
+    copied: list[str] = []
+    adapter = WorkspaceDocumentAdapter(controller, copied.append)
     selection_changes = 0
 
     def on_selection_changed() -> None:
@@ -97,16 +98,23 @@ def test_document_adapter_exposes_selection_and_exact_text(tmp_path: Path) -> No
         WorkspaceDocumentResult(
             relative_path="note.txt",
             status=WorkspaceDocumentStatus.READY,
-            text="one\r\ntwo\n",
-            size_bytes=9,
+            text="one\r\ntwo 🌍\nthree\r",
+            size_bytes=21,
         ),
     )
 
     assert adapter.state == "ready"
-    assert adapter.text == "one\r\ntwo\n"
-    assert adapter.sizeBytes == 9
+    assert adapter.text == "one\r\ntwo 🌍\nthree\r"
+    assert adapter.renderedText == "one\ntwo 🌍\nthree\n"
+    assert adapter.sizeBytes == 21
     assert adapter.canReload
     assert selection_changes == 1
+
+    # Qt positions are UTF-16 offsets in the normalized rendering. Selecting
+    # through the non-BMP globe and the following newline must restore the
+    # original CRLF slice rather than copying Qt's normalized LF projection.
+    assert adapter.copySelection(0, 11)
+    assert copied == ["one\r\ntwo 🌍\n"]
 
     adapter.clearDocument()
     assert not adapter.hasSelection
