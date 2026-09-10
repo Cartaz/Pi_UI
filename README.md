@@ -2,15 +2,15 @@
 
 Un ambiente desktop personale per ragionare, decidere e lavorare con la propria conoscenza: **Pi Agent come harness, Ornith 1.5 su server LAN e interfaccia Python/PySide6/QML**.
 
-Il prodotto ruota intorno a **un unico spazio di lavoro persistente**, con più conversazioni. La chat è la prima priorità; accesso, gestione e consultazione dei file vengono subito dopo e fanno parte della prima versione utilizzabile.
+Il prodotto ruota intorno a **un unico spazio di lavoro persistente**. La chat è la prima priorità; accesso, gestione e consultazione dei file vengono subito dopo e fanno parte della prima versione utilizzabile.
 
 ## Stato reale
 
-M0 è **in corso**. La repository contiene ora la fondazione del runtime: settings tipizzati/atomici con migrazione di schema, framing JSONL Pi RPC, correlazione delle richieste, stato del turno, stop `clear_queue → abort`, launch spec Bubblewrap e trasporto PySide6 `QProcess` asincrono con stdout/stderr separati e shutdown temporizzato.
+**M0 è completata e M1 è attiva.** L'integrazione reale Pi → Bubblewrap → Ornith è stata verificata sul target CachyOS/Wayland: streaming, stop, tool, ripresa sessione, failure/recovery del server, confinement e shutdown sono stati provati senza dichiarare evidenze non osservate. I dettagli restano in [docs/M0_PROGRESS.md](docs/M0_PROGRESS.md).
 
-Su Linux il percorso previsto è GUI → QProcess → Bubblewrap → Pi. La sandbox monta l'AIOS root come unico albero dati personale read-write, usa il runtime Pi read-only e non eredita automaticamente HOME reale, DISPLAY, SSH agent o altri socket desktop. La rete host resta condivisa perché Pi deve raggiungere Ornith in LAN e, quando necessario, Internet.
+La GUI QML è operativa. Oggi include la chat Pi, selezione del workspace e del profilo modello, preflight/sandbox gate, albero lazy dei file del workspace, righe compatte con icone e un'anteprima documenti read-only. Le letture dei file avvengono fuori dal thread GUI e usano accesso descriptor-based che rifiuta traversal e symlink. La preview M1 supporta UTF-8/UTF-8 BOM entro 1 MiB; binari, encoding non supportati, file non regolari e file troppo grandi hanno stato esplicito. Il testo sorgente resta canonico in Python; la copia dalla preview rimappa la selezione Qt sul testo originale per non perdere CRLF.
 
-**La GUI QML non è ancora implementata** e non è ancora stata eseguita dalla repository una prova reale Bubblewrap + Pi + Ornith sulla macchina target. Nessuna parte di M0 che richiede quella baseline locale viene dichiarata completata senza verifica. Vedi [stato M0](docs/M0_PROGRESS.md).
+Il lavoro M1 successivo riguarda la gestione documentale vera e propria: importazione, creazione/rinomina/spostamento, editor con salvataggio atomico e conflitti, revisioni/diff e gestione sicura delle scritture agente. Vedi [stato M1](docs/M1_PROGRESS.md) e [roadmap](ROADMAP.md).
 
 ## Obiettivo
 
@@ -22,8 +22,9 @@ Le conoscenze vivono in file locali leggibili anche senza Pi_UI. La memoria non 
 
 | Documento | Contenuto |
 |---|---|
-| [ROADMAP.md](ROADMAP.md) | Milestone, attività, dipendenze, criteri di accettazione, rischi e prima sequenza di lavoro |
-| [Stato M0](docs/M0_PROGRESS.md) | Evidenze del lavoro corrente, verifiche eseguite e parti ancora aperte |
+| [ROADMAP.md](ROADMAP.md) | Milestone, attività, dipendenze e criteri di accettazione |
+| [Stato M0](docs/M0_PROGRESS.md) | Evidenze e limiti della milestone Pi–Ornith completata |
+| [Stato M1](docs/M1_PROGRESS.md) | Slice GUI/file completati, gate locali e lavoro successivo |
 | [Architettura](docs/ARCHITECTURE.md) | Confini dei moduli, proprietà dello stato, integrazione Pi, persistenza e UI |
 | [Decisioni iniziali](docs/DECISIONS.md) | Scelte, alternative e questioni da verificare |
 | [Validazione](docs/VALIDATION.md) | Scenari funzionali, test, misure e prove locali con Ornith |
@@ -32,20 +33,20 @@ Le conoscenze vivono in file locali leggibili anche senza Pi_UI. La memoria non 
 
 ## Scelte di base
 
-- Python 3.12+, PySide6/Qt 6.11+, QApplication e QQmlApplicationEngine; il ramo M0 testa attualmente Python 3.12/3.13 e PySide6 6.11+ in CI.
+- Python 3.12+, PySide6/Qt 6.11+, `QApplication` e `QQmlApplicationEngine`; la CI corrente copre Python 3.12/3.13/3.14 con compileall, pytest, smoke QML e `qmllint` a zero warning.
 - QML nativo, dark neumorphism: superficie `#141414`, accento `#FF6600`, **Noto Sans**, raggi 28/22/16/12 px.
 - Pi eseguito localmente in background tramite RPC; inferenza Ornith 1.5 sul server LAN configurato dall'utente.
-- Una sola sessione agente attiva nella prima versione; molte conversazioni sullo stesso archivio.
-- Pi è confinato con Bubblewrap sul target Linux; la sandbox è obbligatoria nel percorso di produzione e un lancio diretto resta soltanto una modalità esplicita per test/diagnostica, mai un fallback silenzioso.
-- Configurazione/sessioni Pi usate da Pi_UI sono isolate dall'installazione globale; aggiornamenti Pi espliciti e gestiti dall'app, non automatici all'avvio.
+- Una sola sessione agente attiva nella prima versione; l'architettura non deve rendere strutturalmente difficile la futura gestione first-class dei subagents.
+- Pi è confinato con Bubblewrap sul target Linux; la sandbox è obbligatoria nel percorso di produzione e non esiste fallback silenzioso al lancio diretto.
+- Configurazione/sessioni Pi usate da Pi_UI sono isolate dall'installazione globale; aggiornamenti Pi espliciti e gestiti, non automatici all'avvio.
 - Test con modello reale esclusivamente nella LAN dell'utente; nessun runner GitHub self-hosted.
 - Documenti personali, credenziali e sessioni rimangono fuori dalla repository del software.
 
-Ornith + Pi è una scelta già validata dall'utente nei propri test AIOS-bench; questa repository non contiene quei risultati e non ne dichiara una riproduzione. Il progetto prende ispirazione dall'AI OS di Nate Herk e dal linguaggio visivo di News Aggregator; i riferimenti verificati sono in [Fonti](docs/SOURCES.md).
+Ornith + Pi è una scelta già validata dall'utente nei propri test AIOS-bench; questa repository non contiene quei risultati e non ne dichiara una riproduzione.
 
 ## Prossimo traguardo
 
-Completare la parte restante di **M0**: fissare la baseline locale effettiva, generare la configurazione Pi derivata per il server LAN, verificare il confinement Bubblewrap sulla macchina target, aggiungere i timeout di richiesta/inattività e collegare una shell QML minima a invio/streaming/stop reali. Solo dopo le prove Pi–Ornith si passa alla GUI M1 estesa per chat e file.
+Chiudere il gate reale della preview documenti sul desktop target e poi proseguire M1 senza allargare `AgentController`: gestione documenti e scritture devono restare in servizi/controller dedicati, con salvataggi atomici, controllo delle modifiche esterne e versionamento prima di consentire scritture autonome dell'agente.
 
 ## Contribuire
 
