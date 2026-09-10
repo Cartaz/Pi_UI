@@ -24,6 +24,7 @@ from core.agent import (
     TransportState,
     TurnState,
 )
+from core.agent.session_recovery import SessionRecoveryError, trailing_failed_user_entry_id
 from core.session_id import is_valid_session_id
 from core.settings import AgentSettings, AppSettings, SettingsStore
 
@@ -123,6 +124,7 @@ class AgentController:
         self._turn_state = TurnState.IDLE
         self._session_ready = False
         self._requested_session_id: str | None = None
+        self._recovery_attempted = False
         self._requires_reconciliation = False
         self._inactivity_warning = False
         self._last_error: str | None = None
@@ -315,6 +317,7 @@ class AgentController:
         self._disconnect_requested = False
         self._session_ready = False
         self._requested_session_id = self._settings.last_session_id
+        self._recovery_attempted = False
         self._connection_state = ConnectionState.STARTING
         self._status_text = f"Starting {profile.label}"
         self._state_handler()
@@ -510,6 +513,7 @@ class AgentController:
         elif state == TransportState.STOPPED:
             self._session_ready = False
             self._requested_session_id = None
+            self._recovery_attempted = False
             self._active_user_index = None
             self._active_assistant_index = None
             self._prompt_requests.clear()
@@ -566,14 +570,11 @@ class AgentController:
             )
             return
 
-        if self._settings.last_session_id != session_id:
-            try:
-                updated = replace(self._settings, last_session_id=session_id)
-                self._settings_store.save(updated)
-                self._settings = updated
-            except BaseException as exc:
-                self._fail_and_stop(exc)
-                return
+        try:
+            self._persist_session_id(session_id)
+        except BaseException as exc:
+            self._fail_and_stop(exc)
+            return
 
         client = self._client
         if client is None:
@@ -653,15 +654,152 @@ class AgentController:
                     state=MessageState.COMPLETE,
                 )
             )
+
         self._messages = loaded
         self._active_user_index = None
         self._active_assistant_index = None
         self._messages_reset_handler(tuple(self._messages))
+
+        trailing_failure = (
+            latest_user_index is not None
+            and loaded[latest_user_index].state == MessageState.FAILED
+        )
+        if trailing_failure:
+            if self._recovery_attempted:
+                self._fail_and_stop(
+                    AgentControllerError(
+                        "Pi recovery branch still contains the terminal failed turn"
+                    )
+                )
+                return
+            self._begin_failed_turn_recovery()
+            return
+
         self._session_ready = True
         self._requires_reconciliation = False
         self._connection_state = ConnectionState.READY
         self._status_text = "Ready"
         self._state_handler()
+
+    def _begin_failed_turn_recovery(self) -> None:
+        client = self._client
+        if client is None:
+            return
+        self._recovery_attempted = True
+        self._session_ready = False
+        self._connection_state = ConnectionState.LOADING_SESSION
+        self._status_text = "Preparing clean branch after failed turn"
+        self._state_handler()
+        try:
+            client.get_entries(self._on_recovery_entries_response)
+        except BaseException as exc:
+            self._fail_and_stop(exc)
+
+    def _on_recovery_entries_response(self, response: dict[str, Any]) -> None:
+        if response.get("success") is not True:
+            self._fail_and_stop(
+                AgentControllerError(
+                    _response_error(response) or "Pi rejected get_entries during recovery"
+                )
+            )
+            return
+        data = response.get("data")
+        entries = data.get("entries") if isinstance(data, dict) else None
+        leaf_id = data.get("leafId") if isinstance(data, dict) else None
+        try:
+            entry_id = trailing_failed_user_entry_id(entries, leaf_id)
+        except SessionRecoveryError as exc:
+            self._fail_and_stop(exc)
+            return
+        if entry_id is None:
+            self._fail_and_stop(
+                AgentControllerError(
+                    "Pi message history reported a failed turn but the active session branch did not"
+                )
+            )
+            return
+
+        client = self._client
+        if client is None:
+            return
+        self._status_text = "Branching before failed request"
+        self._state_handler()
+        try:
+            client.fork(entry_id, self._on_recovery_fork_response)
+        except BaseException as exc:
+            self._fail_and_stop(exc)
+
+    def _on_recovery_fork_response(self, response: dict[str, Any]) -> None:
+        if response.get("success") is not True:
+            self._fail_and_stop(
+                AgentControllerError(
+                    _response_error(response) or "Pi rejected failed-turn recovery fork"
+                )
+            )
+            return
+        data = response.get("data")
+        if not isinstance(data, dict) or data.get("cancelled") is not False:
+            self._fail_and_stop(
+                AgentControllerError("Pi failed-turn recovery fork was cancelled")
+            )
+            return
+
+        client = self._client
+        if client is None:
+            return
+        self._status_text = "Verifying recovered Pi session"
+        self._state_handler()
+        try:
+            client.get_state(self._on_recovery_session_state_response)
+        except BaseException as exc:
+            self._fail_and_stop(exc)
+
+    def _on_recovery_session_state_response(self, response: dict[str, Any]) -> None:
+        if response.get("success") is not True:
+            self._fail_and_stop(
+                AgentControllerError("Pi rejected get_state after failed-turn recovery")
+            )
+            return
+        data = response.get("data")
+        session_id = data.get("sessionId") if isinstance(data, dict) else None
+        if not is_valid_session_id(session_id):
+            self._fail_and_stop(
+                AgentControllerError("Pi returned an invalid recovered session id")
+            )
+            return
+
+        previous_session_id = self._requested_session_id
+        if previous_session_id is not None and session_id == previous_session_id:
+            self._fail_and_stop(
+                AgentControllerError(
+                    "Pi failed-turn recovery did not create a distinct branch session"
+                )
+            )
+            return
+
+        try:
+            self._persist_session_id(session_id)
+        except BaseException as exc:
+            self._fail_and_stop(exc)
+            return
+        self._requested_session_id = session_id
+
+        client = self._client
+        if client is None:
+            return
+        self._status_text = "Loading recovered Pi branch"
+        self._state_handler()
+        try:
+            client.get_messages(self._on_history_response)
+        except BaseException as exc:
+            self._fail_and_stop(exc)
+
+    def _persist_session_id(self, session_id: str) -> None:
+        if self._settings.last_session_id == session_id:
+            return
+        updated = replace(self._settings, last_session_id=session_id)
+        self._settings_store.save(updated)
+        self._settings = updated
 
     def _on_response(self, response: dict[str, Any]) -> None:
         self._clear_inactivity_warning()
