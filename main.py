@@ -10,15 +10,31 @@ from PySide6.QtCore import QCoreApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication
 
-from controllers import AgentController, PreflightController, SandboxGateController
+from controllers import (
+    AgentController,
+    PreflightController,
+    SandboxGateController,
+    WorkspaceBrowserController,
+)
 from core.agent.runtime import PiLaunchSpec
 from core.settings import SettingsStore
-from ui.adapters import AgentAdapter, PreflightAdapter, SandboxGateAdapter
-from ui.models import AgentProfileListModel, MessageListModel, PreflightListModel
+from ui.adapters import (
+    AgentAdapter,
+    PreflightAdapter,
+    SandboxGateAdapter,
+    WorkspaceBrowserAdapter,
+)
+from ui.models import (
+    AgentProfileListModel,
+    MessageListModel,
+    PreflightListModel,
+    WorkspaceTreeListModel,
+)
 from ui.native import (
     AppShutdownCoordinator,
     QProcessAgentTransport,
     QtDeadlineScheduler,
+    QtDirectoryScanRunner,
     QtProbeRunner,
     collect_host_runtime_facts,
 )
@@ -63,6 +79,11 @@ def main() -> int:
         settings=settings,
         deadline_scheduler_factory=QtDeadlineScheduler,
     )
+    workspace_scan_runner = QtDirectoryScanRunner(app)
+    workspace_browser_controller = WorkspaceBrowserController(
+        lambda: controller.workspace,
+        workspace_scan_runner,
+    )
     host_facts = collect_host_runtime_facts()
     preflight_controller = PreflightController(
         controller,
@@ -77,11 +98,14 @@ def main() -> int:
 
     message_model = MessageListModel(controller)
     profile_model = AgentProfileListModel(controller)
+    workspace_model = WorkspaceTreeListModel(workspace_browser_controller)
     preflight_model = PreflightListModel(preflight_controller)
     sandbox_gate_model = PreflightListModel(sandbox_gate_controller)
     agent_adapter = AgentAdapter(controller)
+    workspace_adapter = WorkspaceBrowserAdapter(workspace_browser_controller)
     preflight_adapter = PreflightAdapter(preflight_controller)
     sandbox_gate_adapter = SandboxGateAdapter(sandbox_gate_controller)
+    agent_adapter.stateChanged.connect(workspace_browser_controller.sync_workspace)
 
     engine = QQmlApplicationEngine()
     qml_root = Path(__file__).resolve().parent / "ui" / "qml"
@@ -91,6 +115,8 @@ def main() -> int:
             "agentAdapter": agent_adapter,
             "messageModel": message_model,
             "profileModel": profile_model,
+            "workspaceAdapter": workspace_adapter,
+            "workspaceModel": workspace_model,
             "preflightAdapter": preflight_adapter,
             "preflightModel": preflight_model,
             "sandboxGateAdapter": sandbox_gate_adapter,
@@ -101,6 +127,8 @@ def main() -> int:
 
     if not engine.rootObjects():
         LOGGER.critical("QML shell failed to load")
+        workspace_browser_controller.cancel()
+        workspace_scan_runner.shutdown()
         sandbox_gate_controller.cancel()
         preflight_controller.cancel()
         controller.shutdown()
@@ -118,9 +146,13 @@ def main() -> int:
     # Keep the event loop alive after the last window closes so QProcess can
     # complete its asynchronous terminate -> timeout -> kill lifecycle.
     app.setQuitOnLastWindowClosed(False)
+    app.lastWindowClosed.connect(workspace_browser_controller.cancel)
+    app.lastWindowClosed.connect(workspace_scan_runner.shutdown)
     app.lastWindowClosed.connect(sandbox_gate_controller.cancel)
     app.lastWindowClosed.connect(preflight_controller.cancel)
     app.lastWindowClosed.connect(shutdown_coordinator.request_shutdown)
+    app.aboutToQuit.connect(workspace_browser_controller.cancel)
+    app.aboutToQuit.connect(workspace_scan_runner.shutdown)
     app.aboutToQuit.connect(sandbox_gate_controller.cancel)
     app.aboutToQuit.connect(preflight_controller.cancel)
     app.aboutToQuit.connect(controller.shutdown)
