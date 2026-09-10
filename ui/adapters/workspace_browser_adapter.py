@@ -61,10 +61,5 @@ class WorkspaceBrowserAdapter(QObject):
             self._operation_error = str(exc)
             self.stateChanged.emit()
 
-    @Slot()
-    def syncWorkspace(self) -> None:  # noqa: N802
-        self._operation_error = ""
-        self._controller.sync_workspace()
-
     def _on_controller_state(self) -> None:
         self.stateChanged.emit()
