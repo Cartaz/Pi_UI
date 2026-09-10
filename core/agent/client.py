@@ -213,6 +213,14 @@ class AgentClient:
     def get_messages(self, callback: ResponseCallback | None = None) -> str:
         return self._send({"type": "get_messages"}, callback=callback)
 
+    def get_entries(self, callback: ResponseCallback | None = None) -> str:
+        return self._send({"type": "get_entries"}, callback=callback)
+
+    def fork(self, entry_id: str, callback: ResponseCallback | None = None) -> str:
+        if not isinstance(entry_id, str) or not entry_id:
+            raise AgentClientError("entry_id must be a non-empty string")
+        return self._send({"type": "fork", "entryId": entry_id}, callback=callback)
+
     def request_stop(self) -> str:
         """Clear queued input first, then abort the active operation.
 
