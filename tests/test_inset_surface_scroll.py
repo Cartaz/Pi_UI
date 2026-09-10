@@ -79,13 +79,13 @@ InsetSurface {{
     app.processEvents()
     assert float(viewport.property("contentY")) > 0
 
-    area.setProperty("cursorPosition", 0)
-    app.processEvents()
-    assert float(viewport.property("contentY")) <= 4
-
     area.setProperty("cursorPosition", len(long_text))
     app.processEvents()
     assert float(viewport.property("contentY")) > 0
+
+    area.setProperty("cursorPosition", 0)
+    app.processEvents()
+    assert float(viewport.property("contentY")) <= 4
     assert not warnings, "QML warnings:\n" + "\n".join(warnings)
 
     root.deleteLater()
