@@ -328,8 +328,12 @@ ApplicationWindow {
         spacing: 18
 
         RaisedSurface {
+            id: headerSurface
+            objectName: "headerSurface"
+            property bool compactActions: width < 1040
+
             Layout.fillWidth: true
-            Layout.preferredHeight: 104
+            Layout.preferredHeight: compactActions ? 134 : 104
             radius: Theme.radiusCard
             padding: 18
 
@@ -338,7 +342,7 @@ ApplicationWindow {
                 spacing: 16
 
                 ColumnLayout {
-                    Layout.minimumWidth: 210
+                    Layout.minimumWidth: headerSurface.compactActions ? 180 : 210
                     Layout.maximumWidth: 300
                     spacing: 2
 
@@ -365,7 +369,9 @@ ApplicationWindow {
                 Item { Layout.fillWidth: true }
 
                 ColumnLayout {
-                    Layout.preferredWidth: 250
+                    Layout.minimumWidth: headerSurface.compactActions ? 180 : 220
+                    Layout.preferredWidth: headerSurface.compactActions ? 200 : 250
+                    Layout.maximumWidth: 250
                     spacing: 4
 
                     Text {
@@ -469,33 +475,47 @@ ApplicationWindow {
                     }
                 }
 
-                NeuButton {
-                    text: "Workspace"
-                    enabled: !window.agentAdapter.canDisconnect
-                    onClicked: workspaceDialog.open()
-                }
+                GridLayout {
+                    id: headerActions
+                    columns: headerSurface.compactActions ? 2 : 4
+                    columnSpacing: 10
+                    rowSpacing: 10
+                    Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
 
-                NeuButton {
-                    text: "Preflight"
-                    enabled: !window.agentAdapter.canDisconnect
-                    onClicked: preflightDialog.open()
-                }
+                    NeuButton {
+                        text: "Workspace"
+                        Layout.fillWidth: headerSurface.compactActions
+                        enabled: !window.agentAdapter.canDisconnect
+                        onClicked: workspaceDialog.open()
+                    }
 
-                NeuButton {
-                    text: "Rescan"
-                    enabled: window.agentAdapter.hasWorkspace && !window.agentAdapter.canDisconnect
-                    onClicked: window.agentAdapter.refreshProfiles()
-                }
+                    NeuButton {
+                        text: "Preflight"
+                        Layout.fillWidth: headerSurface.compactActions
+                        enabled: !window.agentAdapter.canDisconnect
+                        onClicked: preflightDialog.open()
+                    }
 
-                NeuButton {
-                    accentText: true
-                    text: window.agentAdapter.canDisconnect ? "Disconnect" : "Connect"
-                    enabled: window.agentAdapter.canDisconnect || window.agentAdapter.canConnect
-                    onClicked: {
-                        if (window.agentAdapter.canDisconnect)
-                            window.agentAdapter.disconnectAgent()
-                        else
-                            window.agentAdapter.connectAgent()
+                    NeuButton {
+                        text: "Rescan"
+                        Layout.fillWidth: headerSurface.compactActions
+                        enabled: window.agentAdapter.hasWorkspace && !window.agentAdapter.canDisconnect
+                        onClicked: window.agentAdapter.refreshProfiles()
+                    }
+
+                    NeuButton {
+                        id: connectButton
+                        objectName: "connectButton"
+                        text: window.agentAdapter.canDisconnect ? "Disconnect" : "Connect"
+                        Layout.fillWidth: headerSurface.compactActions
+                        accentText: true
+                        enabled: window.agentAdapter.canDisconnect || window.agentAdapter.canConnect
+                        onClicked: {
+                            if (window.agentAdapter.canDisconnect)
+                                window.agentAdapter.disconnectAgent()
+                            else
+                                window.agentAdapter.connectAgent()
+                        }
                     }
                 }
             }
