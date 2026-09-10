@@ -219,7 +219,8 @@ def test_disconnect_reconnect_uses_exact_captured_session_and_restores_history(
     transport = _transport(harness)
     second_args = _pi_arguments(harness.launch_specs[1])
     assert "--continue" not in second_args
-    session_index = second_args.index("--session")
+    assert "--session" not in second_args
+    session_index = second_args.index("--session-id")
     assert second_args[session_index + 1] == "01stable"
 
     _emit_session_state(transport, session_id="01stable")
@@ -268,7 +269,8 @@ def test_app_restart_uses_persisted_exact_session_id(tmp_path: Path) -> None:
 
     args = _pi_arguments(second_harness.launch_specs[-1])
     assert "--continue" not in args
-    session_index = args.index("--session")
+    assert "--session" not in args
+    session_index = args.index("--session-id")
     assert args[session_index + 1] == "01restart"
 
 

@@ -1,6 +1,6 @@
 # M0 — Stato di avanzamento
 
-Aggiornamento: 9 settembre 2026.
+Aggiornamento: 10 settembre 2026.
 
 Questo documento registra evidenze incrementali della milestone M0 distinguendo CI sintetica e prove osservate sulla macchina CachyOS target.
 
@@ -32,11 +32,16 @@ Questo documento registra evidenze incrementali della milestone M0 distinguendo 
 - ACK prompt distinto dal completamento; `agent_settled` riporta il turno a idle soltanto quando il turno non è già in failure terminale.
 - Deadline RPC senza retry automatico; prompt ACK timeout → outcome `uncertain` e blocco nuovi invii fino a riconciliazione.
 - Watchdog inattività non distruttivo.
-- `QProcessAgentTransport` asincrono con stderr separato e shutdown `terminate()` → `kill()` temporizzato.
+- `QProcessAgentTransport` asincrono con stderr separato, coda diagnostica limitata/sanitizzata e shutdown `terminate()` → `kill()` temporizzato.
+- Un exit non-zero include la coda stderr sanitizzata nell'errore; valori secret env, Bearer token, assegnazioni di credenziali e userinfo URL vengono redatti.
 - `AppShutdownCoordinator` mantiene vivo l'event loop durante lo shutdown e ha un watchdog finale.
-- Session ownership schema 6: se Pi_UI non ha ancora un proprio `last_session_id`, avvia Pi senza `--continue` e senza `--session`, quindi acquisisce via `get_state` il nuovo `sessionId` autorevole e lo persiste. Reconnect/restart successivi usano `--session <id>` esplicito. Pi_UI verifica l'identità della sessione prima di caricare `get_messages` e fallisce chiuso se Pi apre una sessione diversa.
-- Il supporto low-level a `continue_latest` resta una capacità esplicita del runtime Pi, ma non è usato automaticamente dal controller. Un'eventuale futura adozione/importazione di sessioni esistenti dovrà essere un'azione utente esplicita.
+- Uno stop esplicito di un transport il cui QProcess è già terminato porta anche lo stato `FAILED` a `STOPPED`, evitando che l'app aspetti inutilmente il watchdog finale.
+- Session ownership schema 6: se Pi_UI non ha ancora un proprio `last_session_id`, avvia Pi senza `--continue`, `--session` o `--session-id`, quindi acquisisce via `get_state` il nuovo `sessionId` autorevole e lo persiste.
+- Reconnect/restart successivi passano l'ID posseduto con `--session-id <id>`. Su Pi 0.85.1 questa opzione riapre l'esatta sessione locale se esiste e crea una nuova sessione con lo stesso ID se il backing file è stato cancellato. Pi_UI verifica comunque l'identità restituita da `get_state` prima di caricare `get_messages` e fallisce chiuso se Pi apre un ID diverso.
+- Pi_UI non usa più alcun percorso `continue_latest`; l'adozione/importazione futura di sessioni Pi esistenti dovrà essere un'azione utente esplicita.
 - Failure modello dopo prompt accettato: `auto_retry_end(success=false)` viene trattato come terminale, conserva `attempt/finalError`, porta il turno in `FAILED` e non permette al successivo `agent_settled` di tornare silenziosamente `Ready`. Gli errori non retryable sono riconosciuti da `agent_end(willRetry=false)` + assistant `stopReason=error`. Stop/cancellazione esplicita non viene classificata come model failure.
+- Un nuovo `AgentClient` pubblica il proprio stato iniziale `IDLE`, quindi Disconnect → Connect è un confine di riconciliazione esplicito e non può ereditare `FAILED` dal client precedente.
+- Il failed user turn viene marcato `failed`; al reload lo stato viene ricostruito dall'esito assistant terminale, senza confondere errori di retry intermedi con un failure finale.
 - Nessun replay automatico dopo failure terminale: recovery esplicita tramite Disconnect/Reconnect della stessa sessione.
 
 ### Prima shell Qt Quick
@@ -60,7 +65,7 @@ Questo documento registra evidenze incrementali della milestone M0 distinguendo 
 
 ## Evidenze reali osservate — CachyOS target
 
-Macchina target verificata il 9 settembre 2026:
+Macchina target verificata il 9–10 settembre 2026:
 
 - CachyOS/Linux; Python `3.14.7`; PySide6/Qt `6.11.2`.
 - Node `26.8.1` in `/usr/bin/node`.
@@ -90,8 +95,9 @@ Prove osservate:
 16. primo Connect della build schema-5 session-resume con un altro `pi-aios` concorrente: Pi `--continue` ha adottato la sessione attiva/più recente dell'altro agente invece di crearne una Pi_UI. Nessun nuovo messaggio è stato inviato; l'utente ha disconnesso. Bug riprodotto, poi corretto con schema 6;
 17. schema 6 sul target, mantenendo un altro `pi-aios` attivo: primo Connect Pi_UI apre una sessione nuova e propria, `PI_UI_OWN_SESSION_OK` passa, Disconnect → Connect conserva la cronologia: PASS;
 18. chiusura completa della GUI con Pi connesso: processo Pi_UI presente prima della chiusura, nessun orphan dopo, riapertura app + Connect conserva la stessa cronologia: PASS;
-19. server llama.cpp intenzionalmente spento: GUI resta reattiva e Pi esegue 3 retry, senza replay automatico del prompt; **FAILURE UX riprodotto** sulla build precedente perché dopo il retry terminale Pi_UI non mostrava `finalError` e tornava `Ready`. Issue #17 / PR #18 correggono il lifecycle;
-20. dopo riaccensione server + reconnect, il modello ha risposto ma non ha rispettato il marker `SERVER_RECOVERED`: il failed user turn era correttamente ancora nella sessione e il modello ha interpretato le due richieste come prompt injection. Questo non dimostra replay; il recovery funzionale va ritestato dopo il fix #17 con un prompt neutro e verificando separatamente l'assenza di replay.
+19. server llama.cpp intenzionalmente spento: GUI resta reattiva e Pi esegue 3 retry, senza replay automatico del prompt. La prima build tornava erroneamente `Ready`; il fix successivo rende visibile il failure terminale, mantiene il composer bloccato e impedisce ad `agent_settled` di cancellare il failure: PASS sul retest target per questi aspetti;
+20. dopo riaccensione server + Disconnect → Connect, la build successiva mostrava `Ready` ma `Send` restava disabilitato perché il controller conservava `TurnState.FAILED` dal client precedente: bug target riprodotto e corretto in PR #19;
+21. prima del retest di PR #19, l'utente ha cancellato manualmente le vecchie sessioni Pi. Pi_UI conservava `last_session_id` e il successivo `--session <id>` ha fatto terminare Pi 0.85.1 con exit code 1. La nuova diagnostica stderr ha reso visibile `No session found matching ...`; chiudendo l'app già fallita è inoltre scattato il watchdog `Pi shutdown did not settle within 7000 ms`. Entrambi i casi sono coperti dalla PR #21 e richiedono retest target.
 
 ## Evidenze CI osservate
 
@@ -102,17 +108,18 @@ GitHub Actions esegue su Python **3.12, 3.13 e 3.14**:
 3. `pyside6-qmllint --max-warnings 0 -I ui/qml ui/qml/PiUI/*.qml`;
 4. `python -m pytest` con `QT_QPA_PLATFORM=offscreen`.
 
-PR #13 session-resume, PR #14 folder-picker e PR #16 session ownership hanno osservato questi step verdi su tutte e tre le versioni. La suite copre pin `--session <id>`, persistenza/restart, mismatch sessione fail-closed, QML e sandbox/lifecycle. La PR #18 aggiunge failure terminale da retry/non-retryable, latch attraverso `agent_settled`, cancellazione esplicita e proiezione controller non-sendable senza replay.
+PR #13 session-resume, PR #14 folder-picker, PR #16 session ownership, PR #18 terminal failure, PR #19 reconnect recovery e PR #20 stderr diagnostics hanno osservato la matrice verde sulle rispettive head finali. La PR #21 aggiunge il contratto `--session-id` e una regressione QProcess per lo stop esplicito dopo un exit già avvenuto.
 
 ## Contratti upstream Pi usati
 
-La documentazione/codice upstream corrente confermano:
+La documentazione/codice upstream della release **0.85.1** confermano:
 
 - `pi --mode rpc` via stdin/stdout JSONL;
 - `get_state` espone `sessionId` e `sessionFile`;
-- senza `--continue`/`--session`, Pi crea una nuova sessione;
+- senza `--continue`/`--session`/`--session-id`, Pi crea una nuova sessione;
 - `--continue` continua la sessione più recente o ne crea una se non esiste;
-- `--session <path|id>` apre una sessione specifica e fallisce se non viene trovata;
+- `--session <path|id>` apre una sessione specifica e termina con errore se non viene trovata;
+- `--session-id <id>` apre la sessione locale con quell'ID se esiste, altrimenti crea una nuova sessione con lo stesso ID;
 - `--session-dir`, `PI_CODING_AGENT_SESSION_DIR` e `PI_CODING_AGENT_DIR` isolano lo storage;
 - ACK prompt distinto dal completamento; i failure successivi all'ACK sono eventi/message stream, non una seconda response dello stesso request ID;
 - `auto_retry_start` descrive i retry automatici e `auto_retry_end(success=false)` espone `attempt` e `finalError` al termine dei tentativi;
@@ -138,11 +145,13 @@ Riferimenti primari:
 
 ## Lavoro M0 ancora aperto
 
-### Richiede retest target dopo PR #18
+### Richiede retest target dopo PR #21
 
-- Pull della build con failure terminale corretto.
-- Spegnere llama.cpp durante un prompt e verificare: retry visibili, errore finale visibile, composer bloccato, nessun ritorno silenzioso a Ready, nessun replay automatico.
-- Riaccendere server, Disconnect → Connect sulla stessa sessione e inviare un prompt neutro (non un marker imperativo) per distinguere recovery del runtime da comportamento del modello sul failed-turn context.
+- Pull della build con recovery `--session-id` e shutdown del transport già fallito.
+- Con il `last_session_id` attuale ma backing session file assente, Connect deve crearere una sessione nuova con lo stesso ID e arrivare a `Ready` senza exit code 1.
+- Chiudere Pi_UI dopo un eventuale failure e verificare che non ricompaia il watchdog di 7000 ms.
+- Spegnere llama.cpp durante un prompt e verificare end-to-end: retry visibili, errore finale visibile, prompt `failed`, composer bloccato, nessun ritorno silenzioso a Ready, nessun replay automatico.
+- Riaccendere server, Disconnect → Connect sulla stessa sessione e inviare un prompt neutro per verificare che `Send` sia di nuovo abilitato e il runtime risponda normalmente.
 - Eseguire almeno tre reconnect/riavvii consecutivi dopo il pin dell'ID.
 - Verifica grafica/focus finale su KDE/Wayland.
 
@@ -155,4 +164,4 @@ Riferimenti primari:
 
 Folder picker KDE issue #8 e session ownership issue #15 sono state corrette e verificate sul target.
 
-M0 resta **in corso** fino al retest reale del terminal retry failure, recovery e giro finale di reconnect/focus.
+M0 resta **in corso** fino al retest reale di stale-session recovery, terminal retry failure/recovery e giro finale di reconnect/focus.

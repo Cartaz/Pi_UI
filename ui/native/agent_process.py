@@ -142,8 +142,7 @@ class QProcessAgentTransport(QObject):
     def stop(self) -> None:
         self._startup_timer.stop()
         if self._process.state() == QProcess.ProcessState.NotRunning:
-            if self._state != TransportState.FAILED:
-                self._set_state(TransportState.STOPPED)
+            self._set_state(TransportState.STOPPED)
             return
 
         self._set_state(TransportState.STOPPING)
