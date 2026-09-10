@@ -109,7 +109,10 @@ class WorkspaceBrowserController:
     def refresh(self) -> None:
         """Reload the selected root and collapse all expanded directories."""
 
-        self.sync_workspace()
+        candidate = self._workspace_provider()
+        if candidate != self._root:
+            self._reset_for_root(candidate)
+            return
         if self._root is None:
             return
         self._generation += 1
@@ -194,7 +197,7 @@ class WorkspaceBrowserController:
                 relative_directory,
                 self._on_scan_result,
             )
-        except BaseException as exc:
+        except Exception as exc:
             self._pending.pop(relative_directory, None)
             self._handle_scan_error(relative_directory, str(exc))
 
