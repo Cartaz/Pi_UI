@@ -2,21 +2,35 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
 from controllers.workspace_document_controller import (
     WorkspaceDocumentController,
     WorkspaceDocumentError,
 )
+from ui.text_projection import (
+    TextSelectionError,
+    exact_source_selection,
+    qt_plain_text_projection,
+)
+
+CopyText = Callable[[str], None]
 
 
 class WorkspaceDocumentAdapter(QObject):
     stateChanged = Signal()
     selectionChanged = Signal()
 
-    def __init__(self, controller: WorkspaceDocumentController) -> None:
+    def __init__(
+        self,
+        controller: WorkspaceDocumentController,
+        copy_text: CopyText | None = None,
+    ) -> None:
         super().__init__()
         self._controller = controller
+        self._copy_text = copy_text
         self._operation_error = ""
         self._last_selected_path = controller.selected_path
         controller.set_state_handler(self._on_controller_state)
@@ -47,7 +61,15 @@ class WorkspaceDocumentAdapter(QObject):
 
     @Property(str, notify=stateChanged)
     def text(self) -> str:
+        """Canonical decoded source text, including original newline sequences."""
+
         return self._controller.text
+
+    @Property(str, notify=stateChanged)
+    def renderedText(self) -> str:  # noqa: N802
+        """QTextDocument-compatible projection used only for visual rendering."""
+
+        return qt_plain_text_projection(self._controller.text)
 
     @Property(str, notify=stateChanged)
     def message(self) -> str:
@@ -86,6 +108,30 @@ class WorkspaceDocumentAdapter(QObject):
         except WorkspaceDocumentError as exc:
             self._operation_error = str(exc)
             self.stateChanged.emit()
+
+    @Slot(int, int, result=bool)
+    def copySelection(self, start_utf16: int, end_utf16: int) -> bool:  # noqa: N802
+        """Copy a rendered Qt selection using the exact canonical source slice."""
+
+        self._operation_error = ""
+        if start_utf16 == end_utf16:
+            return False
+        if self._copy_text is None:
+            self._operation_error = "clipboard integration is unavailable"
+            self.stateChanged.emit()
+            return False
+        try:
+            selected = exact_source_selection(
+                self._controller.text,
+                start_utf16,
+                end_utf16,
+            )
+            self._copy_text(selected)
+        except (TextSelectionError, RuntimeError, OSError) as exc:
+            self._operation_error = str(exc)
+            self.stateChanged.emit()
+            return False
+        return True
 
     @Slot()
     def clearDocument(self) -> None:  # noqa: N802
