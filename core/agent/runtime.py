@@ -69,7 +69,6 @@ def build_launch_spec(
     paths: PiRuntimePaths | None = None,
     base_environment: Mapping[str, str] | None = None,
     session_id: str | None = None,
-    continue_latest: bool = False,
 ) -> PiLaunchSpec:
     """Create argv/environment for Pi RPC without invoking a shell.
 
@@ -78,17 +77,15 @@ def build_launch_spec(
     environment is allow-listed here instead of inherited wholesale from the
     desktop session.
 
-    ``session_id`` resumes one exact Pi session. ``continue_latest`` is only a
-    bootstrap policy for installations that do not yet have a captured session
-    id. They are intentionally mutually exclusive.
+    ``session_id`` is Pi_UI's owned session identity. Pi 0.85.1's
+    ``--session-id`` reopens that exact project session when it exists and
+    creates a new session with the same id when the backing session file was
+    deleted. This avoids both global-recency selection and brittle stale-file
+    recovery in Pi_UI.
     """
 
     if session_id is not None and not is_valid_session_id(session_id):
         raise RuntimeConfigurationError("invalid Pi session id")
-    if session_id is not None and continue_latest:
-        raise RuntimeConfigurationError(
-            "session_id and continue_latest cannot be requested together"
-        )
 
     runtime_paths = paths or PiRuntimePaths.for_workspace(working_directory)
     base_env = dict(os.environ if base_environment is None else base_environment)
@@ -102,7 +99,6 @@ def build_launch_spec(
         settings,
         runtime_paths,
         session_id=session_id,
-        continue_latest=continue_latest,
     )
 
     if not settings.sandbox_enabled:
@@ -181,7 +177,6 @@ def _build_pi_arguments(
     paths: PiRuntimePaths,
     *,
     session_id: str | None,
-    continue_latest: bool,
 ) -> list[str]:
     session_dir = (
         str(paths.sandbox_session_dir)
@@ -190,9 +185,7 @@ def _build_pi_arguments(
     )
     arguments = ["--mode", "rpc", "--session-dir", session_dir]
     if session_id is not None:
-        arguments.extend(("--session", session_id))
-    elif continue_latest:
-        arguments.append("--continue")
+        arguments.extend(("--session-id", session_id))
     if settings.provider:
         arguments.extend(("--provider", settings.provider))
     if settings.model:
