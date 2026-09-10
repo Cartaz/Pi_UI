@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import codecs
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -17,6 +18,15 @@ from core.agent.transport import (
     StateHandler,
     TransportState,
 )
+
+_MAX_DIAGNOSTIC_TAIL_CHARS = 2000
+_SENSITIVE_ENV_NAME_PARTS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "AUTH")
+_BEARER_RE = re.compile(r"(?i)\bbearer\s+[^\s]+")
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(api[_-]?key|token|secret|password|authorization|credential)"
+    r"([\"']?\s*[:=]\s*[\"']?)([^\"'\s,;}]+)"
+)
+_URL_CREDENTIAL_RE = re.compile(r"([a-zA-Z][a-zA-Z0-9+.-]*://[^:/\s]+:)[^@\s]+@")
 
 
 class QProcessTransportError(RuntimeError):
@@ -48,6 +58,8 @@ class QProcessAgentTransport(QObject):
         self._state = TransportState.STOPPED
         self._decoder = JsonlDecoder(max_record_bytes=max_record_bytes)
         self._stderr_decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self._stderr_tail = ""
+        self._redaction_values = _sensitive_environment_values(self._spec.environment)
 
         self._record_handler: RecordHandler = lambda _record: None
         self._diagnostic_handler: DiagnosticHandler = lambda _text: None
@@ -99,6 +111,8 @@ class QProcessAgentTransport(QObject):
         prepare_runtime_paths(self._spec.paths)
         self._decoder = JsonlDecoder(max_record_bytes=self._max_record_bytes)
         self._stderr_decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self._stderr_tail = ""
+        self._redaction_values = _sensitive_environment_values(self._spec.environment)
 
         environment = QProcessEnvironment()
         for key, value in self._spec.environment.items():
@@ -159,7 +173,7 @@ class QProcessAgentTransport(QObject):
             return
         text = self._stderr_decoder.decode(chunk, final=False)
         if text:
-            self._diagnostic_handler(text)
+            self._record_stderr(text)
 
     def _on_process_error(self, process_error: QProcess.ProcessError) -> None:
         if self._state in {TransportState.STOPPING, TransportState.FAILED}:
@@ -196,12 +210,13 @@ class QProcessAgentTransport(QObject):
             self._set_state(TransportState.STOPPED)
             return
 
-        self._fail(
-            QProcessTransportError(
-                f"Pi process exited unexpectedly: code={exit_code}, status={exit_status.name}"
-            ),
-            kill_process=False,
+        message = (
+            f"Pi process exited unexpectedly: code={exit_code}, status={exit_status.name}"
         )
+        diagnostic = self._stderr_tail.strip()
+        if diagnostic:
+            message = f"{message}; stderr: {diagnostic}"
+        self._fail(QProcessTransportError(message), kill_process=False)
 
     def _on_startup_timeout(self) -> None:
         if self._state != TransportState.STARTING:
@@ -222,7 +237,14 @@ class QProcessAgentTransport(QObject):
         chunk = bytes(self._process.readAllStandardError())
         text = self._stderr_decoder.decode(chunk, final=True)
         if text:
-            self._diagnostic_handler(text)
+            self._record_stderr(text)
+
+    def _record_stderr(self, text: str) -> None:
+        sanitized = _sanitize_process_diagnostic(text, self._redaction_values)
+        if not sanitized:
+            return
+        self._stderr_tail = (self._stderr_tail + sanitized)[-_MAX_DIAGNOSTIC_TAIL_CHARS:]
+        self._diagnostic_handler(sanitized)
 
     def _fail(self, error: BaseException, *, kill_process: bool) -> None:
         self._startup_timer.stop()
@@ -237,3 +259,27 @@ class QProcessAgentTransport(QObject):
             return
         self._state = state
         self._state_handler(state)
+
+
+def _sensitive_environment_values(environment: Mapping[str, str]) -> tuple[str, ...]:
+    values = {
+        value
+        for key, value in environment.items()
+        if value
+        and len(value) >= 4
+        and any(part in key.upper() for part in _SENSITIVE_ENV_NAME_PARTS)
+    }
+    return tuple(sorted(values, key=len, reverse=True))
+
+
+def _sanitize_process_diagnostic(text: str, redaction_values: tuple[str, ...]) -> str:
+    sanitized = text
+    for value in redaction_values:
+        sanitized = sanitized.replace(value, "<redacted>")
+    sanitized = _BEARER_RE.sub("Bearer <redacted>", sanitized)
+    sanitized = _SECRET_ASSIGNMENT_RE.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}<redacted>",
+        sanitized,
+    )
+    sanitized = _URL_CREDENTIAL_RE.sub(r"\1<redacted>@", sanitized)
+    return sanitized
