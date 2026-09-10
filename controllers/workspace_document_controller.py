@@ -67,7 +67,7 @@ class WorkspaceDocumentController:
         self._text = ""
         self._message = ""
         self._size_bytes = 0
-        self._status_text = "No document selected"
+        self._status_text = "No workspace selected"
         self._generation = 0
         self._request_counter = 0
         self._pending_request_id: str | None = None
