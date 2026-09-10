@@ -5,4 +5,5 @@ InsetSurface 1.0 InsetSurface.qml
 NeuButton 1.0 NeuButton.qml
 WorkspaceEntryIcon 1.0 WorkspaceEntryIcon.qml
 WorkspacePanel 1.0 WorkspacePanel.qml
+DocumentPanel 1.0 DocumentPanel.qml
 Main 1.0 Main.qml
