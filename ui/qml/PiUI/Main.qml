@@ -13,10 +13,13 @@ ApplicationWindow {
     required property var profileModel
     required property var workspaceAdapter
     required property var workspaceModel
+    required property var documentAdapter
     required property var preflightAdapter
     required property var preflightModel
     required property var sandboxGateAdapter
     required property var sandboxGateModel
+
+    readonly property bool wideDocumentLayout: width >= 1120
 
     width: 1180
     height: 760
@@ -25,6 +28,11 @@ ApplicationWindow {
     visible: true
     title: "Pi_UI"
     color: Theme.surface
+
+    onWideDocumentLayoutChanged: {
+        if (wideDocumentLayout && documentDrawer.opened)
+            documentDrawer.close()
+    }
 
     function submitComposer() {
         const value = composer.text
@@ -313,6 +321,31 @@ ApplicationWindow {
         }
     }
 
+    Drawer {
+        id: documentDrawer
+        objectName: "documentDrawer"
+        edge: Qt.RightEdge
+        width: Math.min(520, window.width - 24)
+        height: window.height
+        modal: true
+        interactive: !window.wideDocumentLayout
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+        background: Rectangle {
+            color: Theme.surface
+        }
+
+        DocumentPanel {
+            id: documentDrawerPanel
+            objectName: "documentDrawerPanel"
+            anchors.fill: parent
+            anchors.margins: 12
+            documentAdapter: window.documentAdapter
+            closable: true
+            onCloseRequested: documentDrawer.close()
+        }
+    }
+
     Connections {
         target: window.agentAdapter
         function onRestoreComposerText(text) {
@@ -321,6 +354,14 @@ ApplicationWindow {
             else
                 composer.text += "\n" + text
             composer.forceActiveFocus()
+        }
+    }
+
+    Connections {
+        target: window.documentAdapter
+        function onSelectionChanged() {
+            if (!window.wideDocumentLayout && window.documentAdapter.hasSelection)
+                documentDrawer.open()
         }
     }
 
@@ -748,6 +789,17 @@ ApplicationWindow {
                         }
                     }
                 }
+            }
+
+            DocumentPanel {
+                id: documentPanel
+                objectName: "documentPanel"
+                visible: window.wideDocumentLayout
+                Layout.fillHeight: true
+                Layout.minimumWidth: visible ? 280 : 0
+                Layout.preferredWidth: visible ? 320 : 0
+                Layout.maximumWidth: visible ? 420 : 0
+                documentAdapter: window.documentAdapter
             }
         }
     }
