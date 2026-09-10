@@ -32,14 +32,17 @@ def _application() -> QApplication:
     return QApplication([])
 
 
-def test_document_panel_preserves_plain_text_and_is_read_only(tmp_path: Path) -> None:
+def test_document_panel_preserves_source_while_rendering_qt_plain_text(tmp_path: Path) -> None:
     app = _application()
     expected = "prima\r\nseconda\nUnicode: 🌍\n"
+    rendered = "prima\nseconda\nUnicode: 🌍\n"
     (tmp_path / "note.txt").write_bytes(expected.encode("utf-8"))
     controller = WorkspaceDocumentController(lambda: tmp_path, _ImmediateDocumentRunner())
     adapter = WorkspaceDocumentAdapter(controller)
     adapter.openPath("note.txt")
+
     assert adapter.text == expected
+    assert adapter.renderedText == rendered
 
     engine = QQmlApplicationEngine()
     qml_root = Path(__file__).resolve().parents[1] / "ui" / "qml"
@@ -63,7 +66,9 @@ def test_document_panel_preserves_plain_text_and_is_read_only(tmp_path: Path) ->
     preview = root.findChild(QQuickItem, "documentPreviewText")
     assert preview is not None
     assert bool(preview.property("readOnly"))
-    assert preview.property("text") == expected
+    assert bool(preview.property("selectByMouse"))
+    assert preview.property("text") == rendered
+    assert adapter.text == expected
     assert not warnings, "QML warnings:\n" + "\n".join(warnings)
 
     controller.cancel()
