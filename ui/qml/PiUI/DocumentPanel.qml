@@ -137,7 +137,7 @@ RaisedSurface {
                     id: previewText
                     objectName: "documentPreviewText"
                     anchors.fill: parent
-                    text: panel.documentAdapter.text
+                    text: panel.documentAdapter.renderedText
                     readOnly: true
                     color: Theme.textPrimary
                     selectionColor: Theme.accent
@@ -151,6 +151,17 @@ RaisedSurface {
                     Accessible.name: panel.documentAdapter.selectedName.length > 0
                         ? "Document preview " + panel.documentAdapter.selectedName
                         : "Document preview"
+
+                    Keys.onPressed: function(event) {
+                        if (event.matches(StandardKey.Copy)
+                                && previewText.selectionStart !== previewText.selectionEnd) {
+                            panel.documentAdapter.copySelection(
+                                previewText.selectionStart,
+                                previewText.selectionEnd
+                            )
+                            event.accepted = true
+                        }
+                    }
                 }
             }
         }
