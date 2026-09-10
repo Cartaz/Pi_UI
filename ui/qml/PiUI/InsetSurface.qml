@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 
 Item {
     id: root
@@ -7,6 +8,29 @@ Item {
     property real radius: Theme.radiusControl
     property real padding: 14
     property bool focused: false
+
+    function ensureCursorVisible() {
+        if (content.children.length === 0)
+            return
+        const child = content.children[0]
+        if (child.cursorRectangle === undefined)
+            return
+
+        const margin = 4
+        const cursorTop = child.cursorRectangle.y - margin
+        const cursorBottom = child.cursorRectangle.y + child.cursorRectangle.height + margin
+        const viewportTop = viewport.contentY
+        const viewportBottom = viewportTop + viewport.height
+
+        if (cursorTop < viewportTop) {
+            viewport.contentY = Math.max(0, cursorTop)
+        } else if (cursorBottom > viewportBottom) {
+            viewport.contentY = Math.min(
+                Math.max(0, viewport.contentHeight - viewport.height),
+                cursorBottom - viewport.height
+            )
+        }
+    }
 
     Rectangle {
         id: panel
@@ -54,9 +78,42 @@ Item {
         color: Qt.rgba(1, 1, 1, 0.05)
     }
 
-    Item {
-        id: content
+    Flickable {
+        id: viewport
+        objectName: "insetViewport"
         anchors.fill: panel
         anchors.margins: root.padding
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        flickableDirection: Flickable.VerticalFlick
+        contentWidth: width
+        contentHeight: Math.max(height, content.implicitHeight)
+        interactive: contentHeight > height
+
+        ScrollBar.vertical: ScrollBar {
+            objectName: "insetVerticalScrollBar"
+            policy: ScrollBar.AsNeeded
+        }
+
+        Item {
+            id: content
+            width: viewport.width
+            height: Math.max(viewport.height, implicitHeight)
+            implicitHeight: {
+                let value = 0
+                for (let index = 0; index < children.length; ++index)
+                    value = Math.max(value, children[index].implicitHeight)
+                return value
+            }
+        }
+    }
+
+    Connections {
+        target: content.children.length > 0 ? content.children[0] : null
+        ignoreUnknownSignals: true
+
+        function onCursorRectangleChanged() {
+            root.ensureCursorVisible()
+        }
     }
 }
