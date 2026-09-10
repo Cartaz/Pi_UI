@@ -102,7 +102,7 @@ RaisedSurface {
                     if (event.key === Qt.Key_Return
                             || event.key === Qt.Key_Enter
                             || event.key === Qt.Key_Space) {
-                        panel.workspaceAdapter.toggleRow(fileList.currentIndex)
+                        panel.workspaceAdapter.activateRow(fileList.currentIndex)
                         event.accepted = true
                     }
                 }
@@ -182,8 +182,7 @@ RaisedSurface {
                         acceptedButtons: Qt.LeftButton
                         onTapped: {
                             fileList.currentIndex = fileRow.index
-                            if (fileRow.canExpand)
-                                panel.workspaceAdapter.toggleRow(fileRow.index)
+                            panel.workspaceAdapter.activateRow(fileRow.index)
                             fileList.forceActiveFocus()
                         }
                     }
