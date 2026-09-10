@@ -16,6 +16,11 @@ from .workspace_browser_controller import (
     WorkspaceBrowserController,
     WorkspaceBrowserError,
 )
+from .workspace_document_controller import (
+    WorkspaceDocumentController,
+    WorkspaceDocumentError,
+    WorkspaceDocumentState,
+)
 
 __all__ = [
     "AgentController",
@@ -32,4 +37,7 @@ __all__ = [
     "VisibleWorkspaceEntry",
     "WorkspaceBrowserController",
     "WorkspaceBrowserError",
+    "WorkspaceDocumentController",
+    "WorkspaceDocumentError",
+    "WorkspaceDocumentState",
 ]
