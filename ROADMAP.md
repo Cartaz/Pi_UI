@@ -1,6 +1,6 @@
 # Roadmap dettagliata — Pi_UI
 
-Stato: pianificazione iniziale. Tutte le milestone applicative sono **da iniziare**. Le versioni indicate sono traguardi proposti, non release esistenti. Aggiornamento: 8 settembre 2026.
+Stato: **M0 completata; M1 è la milestone attiva successiva.** Le versioni indicate sono traguardi proposti, non release esistenti. Aggiornamento: 10 settembre 2026.
 
 ## 1. Risultato da ottenere
 
@@ -13,7 +13,7 @@ Priorità vincolanti:
 3. Ricerca documentale, fonti e memoria operativa affidabile.
 4. Capacità operative e routine introdotte quando servono a workflow reali.
 
-Il test AIOS-bench dell'utente ha già orientato la scelta Pi + Ornith. M0 verifica l'integrazione specifica di questa app e non riapre un confronto tra harness.
+Il test AIOS-bench dell'utente ha già orientato la scelta Pi + Ornith. M0 ha verificato l'integrazione specifica di questa app e non riapre un confronto tra harness.
 
 ### Prima esperienza completa da dimostrare
 
@@ -41,8 +41,8 @@ I file non supportati possono essere conservati come originali e aperti nell'app
 
 | Milestone | Risultato consegnabile | Dipendenze | Gate |
 |---|---|---|---|
-| M0 / 0.1 | Fondazione e integrazione Pi–LAN verificata | Configurazione locale funzionante dell'utente | Streaming, strumenti, stop, persistenza e shutdown verificati |
-| M1 / 0.2 | GUI usabile per chat e file | M0 | Sessione di lavoro completa senza terminale |
+| **M0 / 0.1 — completata** | Fondazione e integrazione Pi–LAN verificata | Configurazione locale funzionante dell'utente | Streaming, strumenti, stop, persistenza e shutdown verificati |
+| **M1 / 0.2 — prossima** | GUI usabile per chat e file | M0 | Sessione di lavoro completa senza terminale |
 | M2 / 0.3 | Conoscenza ricercabile e fonti apribili | M1 | Recupero e citazioni verificati su corpus campione |
 | M3 / 0.4 | Memoria operativa e comportamento da partner | M2 | Decisioni persistenti, provenienza e conflitti gestiti |
 | M4 / 0.5 | Capacità e routine selezionate | M3 | Almeno una procedura utile, osservabile e interrompibile |
@@ -52,23 +52,27 @@ Robustezza, accessibilità e protezione dei dati iniziano in M0/M1: M5 consolida
 
 ## 4. M0 — Fondazione e collegamento reale
 
+**Stato: COMPLETATA il 10 settembre 2026.** Evidenze e limiti sono registrati in [docs/M0_PROGRESS.md](docs/M0_PROGRESS.md).
+
 **Obiettivo:** portare nella nuova integrazione la configurazione Pi–Ornith già funzionante.
 
-- [ ] M0.1 Inventariare versione/package Pi realmente usati in AIOS-bench, Node, build llama.cpp, model ID esposto, quantizzazione, template, opzioni tool/reasoning, contesto effettivo e parametri di generazione. Conservare un manifest privo di segreti; non inventare valori dal nome Ornith.
-- [ ] M0.2 Fissare Python/PySide6 e Pi/Node compatibili dopo installazione verificata. Definire lock e procedura di aggiornamento; non aggiornare Pi automaticamente all'avvio.
-- [ ] M0.3 Implementare settings tipizzati, default, validazione, migrazione di schema, scrittura atomica e recupero da file malformato. Endpoint e credenziali restano configurazione locale.
-- [ ] M0.4 Definire AgentTransport e parser RPC indipendenti dalla presentazione; implementare QProcess asincrono come trasporto Qt. Identificare ogni richiesta, correlare risposte e distinguere accettazione del prompt da completamento del turno.
-- [ ] M0.5 Gestire frame JSONL spezzati, UTF-8 a cavallo di chunk, più frame per lettura, errori, EOF e output eccedente i limiti. Separare stderr e diagnostica dai messaggi RPC.
-- [ ] M0.6 Introdurre stato processo/turno e timeout distinti per avvio, richiesta, inattività e arresto; valori configurabili adeguati all'inferenza locale lenta. Nessuna `waitFor*` bloccante nel thread grafico.
-- [ ] M0.7 Configurare il provider compatibile con la baseline; prima scelta OpenAI Chat Completions, conservando un'altra API già validata se necessaria. Verificare model ID e context window; nessun fallback a cloud o altro modello.
-- [ ] M0.8 Implementare invio, streaming, stop e chiusura. Specificare la semantica della coda; per uno stop che svuota tutto, usare i comandi disponibili nella versione fissata e recuperare i messaggi non eseguiti.
-- [ ] M0.9 Configurare sessioni Pi in area dati dell'app. Verificare ripresa e isolamento dalle impostazioni globali di altre installazioni Pi. Risolvere esplicitamente il caricamento delle risorse fidate in modalità RPC.
-- [ ] M0.10 Creare il primo shell QML minimale con controlli reali per connessione, invio e stop; introdurre test core/trasporto e smoke QML, più CI deterministica su runner ospitati.
-- [ ] M0.11 Eseguire in LAN una risposta streaming e un ciclo lettura → modifica di file di prova → verifica. Riprodurre errore server e arresto dell'app; salvare esiti e versioni.
+La baseline M0.1 è stata ristretta ai dati necessari all'integrazione posseduta da Pi_UI. L'esatto build commit di llama.cpp, chat template e insieme completo dei flag server/generazione non sono stati inventariati integralmente e non vengono dichiarati noti: saranno raccolti quando Pi_UI assumerà responsabilità di configurazione del server o quando servirà una baseline prestazionale riproducibile.
 
-**Accettazione:** tre sessioni consecutive con risposta e tool reali; stop riconosciuto e GUI reattiva; file di prova corretto; sessione ripresa senza duplicare operazioni; nessun processo posseduto rimasto dopo chiusura. Test automatici pertinenti verdi e report LAN distinto da CI.
+- [x] M0.1 Inventariare la baseline necessaria all'integrazione: Pi/Node/Python/PySide6, Bubblewrap, provider/API/model ID, endpoint LAN, contesto esposto e quantizzazione riportata dal server. Conservare dati privi di segreti; non inventare capacità dal nome Ornith.
+- [x] M0.2 Fissare runtime Pi dedicato e range Python/PySide6 compatibili dopo installazione verificata; nessun aggiornamento Pi automatico all'avvio.
+- [x] M0.3 Implementare settings tipizzati, default, validazione, migrazione di schema, scrittura atomica e recupero da file malformato. Endpoint e credenziali restano configurazione locale.
+- [x] M0.4 Definire AgentTransport e parser RPC indipendenti dalla presentazione; implementare QProcess asincrono come trasporto Qt. Identificare ogni richiesta, correlare risposte e distinguere accettazione del prompt da completamento del turno.
+- [x] M0.5 Gestire frame JSONL spezzati, UTF-8 a cavallo di chunk, più frame per lettura, errori, EOF e output eccedente i limiti. Separare stderr e diagnostica dai messaggi RPC.
+- [x] M0.6 Introdurre stato processo/turno e timeout distinti per avvio, richiesta, inattività e arresto; valori configurabili adeguati all'inferenza locale lenta. Nessuna `waitFor*` bloccante nel thread grafico.
+- [x] M0.7 Configurare il provider compatibile con la baseline reale `openai-completions`, verificando model ID e context window; nessun fallback a cloud o altro modello.
+- [x] M0.8 Implementare invio, streaming, stop e chiusura. Specificare la semantica della coda; per uno stop che svuota tutto, usare i comandi disponibili nella versione fissata e recuperare i messaggi non eseguiti.
+- [x] M0.9 Configurare sessioni Pi nello storage del workspace controllato dall'app, con ownership esplicita dell'ID; verificare ripresa, stale-session recovery e isolamento da altre installazioni/client Pi.
+- [x] M0.10 Creare il primo shell QML minimale con controlli reali per connessione, invio e stop; introdurre test core/trasporto e smoke QML, più CI deterministica su runner ospitati.
+- [x] M0.11 Eseguire in LAN risposta streaming, ciclo lettura → modifica file, server-down recovery, confinement Bubblewrap, shutdown e test KDE/Wayland; salvare esiti e versioni.
 
-**Uscita:** integrazione provata, dipendenze fissate, primo avvio documentato e misure baseline. Non procedere a una UI estesa se protocollo o chiamate strumenti sono ancora instabili.
+**Accettazione:** superata. Tre sessioni/reconnect consecutivi con risposta reale; tool e stop verificati; file di prova corretto; sessione ripresa senza duplicare operazioni; failure server recuperato senza deferred replay; nessun processo posseduto rimasto dopo chiusura; test automatici pertinenti verdi; report LAN distinto da CI.
+
+**Uscita:** raggiunta. L'integrazione Pi–Ornith è provata sul target reale e M1 può estendere chat e file senza riaprire il protocollo di base.
 
 ## 5. M1 — Chat e file nella prima GUI utilizzabile
 
@@ -158,7 +162,7 @@ Robustezza, accessibilità e protezione dei dati iniziano in M0/M1: M5 consolida
 - [ ] M5.3 Backup consistente di file, metadati, revisioni, settings e sessioni Pi; indice escluso se ricostruibile. Restore provato in un workspace separato, con hash e verifica delle citazioni.
 - [ ] M5.4 Installer Bash idempotente e indipendente dalla CWD, venv riparabile, dipendenze fissate, verifiche QML/shader e launcher desktop. Aggiornamento con backup e rollback compatibile con le migrazioni dati.
 - [ ] M5.5 Test su KDE/CachyOS target, Wayland e X11 se dichiarati supportati, scaling 100/125/150/200%, tastiera e focus. Windows è un target successivo finché non verificato.
-- [ ] M5.6 Misurare avvio, latenza UI, ricerca, scroll e PSS di GUI/Pi/worker. Pubblicare hardware, backend grafico, dataset, condizioni e ripetizioni; distinguere inferenza LAN da overhead client.
+- [ ] M5.6 Misurare avvio, latenza UI, ricerca, scroll e PSS di GUI/Pi/worker. Pubblicare hardware, backend grafico, dataset, condizioni e ripetizioni; distinguere inferenza LAN da overhead client. Quando serve riproducibilità server, registrare anche build llama.cpp, chat template e flag di generazione/server pertinenti.
 - [ ] M5.7 Documentare accessi file/rete, trust delle estensioni e limiti di isolamento. Se si vuole confinamento alla cartella, adottare sandbox di sistema e provare anche shell, symlink e processi figli prima di dichiararlo.
 - [ ] M5.8 Scegliere licenza, verificare licenze delle dipendenze e del font distribuito, preparare note di rilascio, guida breve e troubleshooting.
 
@@ -184,12 +188,9 @@ Robustezza, accessibilità e protezione dei dati iniziano in M0/M1: M5 consolida
 
 ## 11. Ordine delle prime attività
 
-1. M0.1–M0.3: acquisire la baseline locale, fissare dipendenze e settings.
-2. M0.4–M0.6: parser, stato e processo asincrono, con prove deterministiche.
-3. M0.7–M0.9: provider LAN, stop, sessioni e trust delle risorse.
-4. M0.10–M0.11: shell minima, prova reale e report; chiudere M0 solo con evidenze.
-5. M1: chat e file in incrementi completi, prima lettura e poi scrittura/versioni verificate.
-6. M2–M3: ricerca, citazioni e memoria valutate sul campione reale.
-7. M4: una routine selezionata e design subagents quando i casi d'uso sono definiti; M5: consolidamento e release.
+1. **M0 completata:** baseline applicativa, parser/stato/processo, provider LAN, session ownership, sandbox, shell minima, fault recovery e prove target concluse.
+2. **M1 attiva:** chat e file in incrementi completi, prima lettura e poi scrittura/versioni verificate.
+3. M2–M3: ricerca, citazioni e memoria valutate sul campione reale.
+4. M4: una routine selezionata e design subagents quando i casi d'uso sono definiti; M5: consolidamento e release.
 
 Ogni milestone chiude con revisione strategica di ownership, duplicazioni, confini Qt/Python/Pi e complessità introdotta. Eventuali deviazioni vanno in [DECISIONS.md](docs/DECISIONS.md); criteri e prove in [VALIDATION.md](docs/VALIDATION.md). Fonti e fatti upstream sono raccolti in [SOURCES.md](docs/SOURCES.md).
