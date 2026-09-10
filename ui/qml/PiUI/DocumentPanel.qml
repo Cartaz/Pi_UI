@@ -135,6 +135,7 @@ RaisedSurface {
 
                 TextArea {
                     id: previewText
+                    objectName: "documentPreviewText"
                     anchors.fill: parent
                     text: panel.documentAdapter.text
                     readOnly: true
