@@ -11,6 +11,8 @@ ApplicationWindow {
     required property var agentAdapter
     required property var messageModel
     required property var profileModel
+    required property var workspaceAdapter
+    required property var workspaceModel
     required property var preflightAdapter
     required property var preflightModel
     required property var sandboxGateAdapter
@@ -521,210 +523,229 @@ ApplicationWindow {
             }
         }
 
-        RaisedSurface {
+        RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            radius: Theme.radiusMain
-            padding: 22
+            spacing: 18
 
-            ColumnLayout {
-                anchors.fill: parent
-                spacing: 14
+            WorkspacePanel {
+                id: workspacePanel
+                objectName: "workspacePanel"
+                Layout.fillHeight: true
+                Layout.minimumWidth: 220
+                Layout.preferredWidth: 270
+                Layout.maximumWidth: 340
+                workspaceAdapter: window.workspaceAdapter
+                workspaceModel: window.workspaceModel
+            }
 
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 10
+            RaisedSurface {
+                id: conversationSurface
+                objectName: "conversationSurface"
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                radius: Theme.radiusMain
+                padding: 22
 
-                    Text {
-                        text: "Conversation"
-                        color: Theme.textPrimary
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 18
-                        font.weight: Font.DemiBold
-                    }
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 14
 
-                    Item { Layout.fillWidth: true }
-
-                    Text {
-                        text: window.agentAdapter.statusText
-                        color: window.agentAdapter.lastError.length > 0
-                            ? Theme.errorText
-                            : Theme.textSecondary
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 12
-                        horizontalAlignment: Text.AlignRight
-                        elide: Text.ElideRight
-                        Layout.maximumWidth: 430
-                    }
-                }
-
-                Item {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-
-                    Text {
-                        anchors.centerIn: parent
-                        visible: transcript.count === 0
-                        text: window.agentAdapter.connectionState === "ready"
-                            ? "Start a conversation with your AIOS"
-                            : "Connect Pi to load the conversation"
-                        color: Theme.textMuted
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 14
-                    }
-
-                    ListView {
-                        id: transcript
-                        anchors.fill: parent
-                        clip: true
-                        reuseItems: true
+                    RowLayout {
+                        Layout.fillWidth: true
                         spacing: 10
-                        model: window.messageModel
-                        boundsBehavior: Flickable.StopAtBounds
-                        ScrollBar.vertical: ScrollBar { }
-                        property bool followTail: true
 
-                        onMovementStarted: followTail = false
-                        onMovementEnded: followTail = atYEnd
-                        onCountChanged: {
-                            if (followTail)
-                                Qt.callLater(positionViewAtEnd)
-                        }
-                        onContentHeightChanged: {
-                            if (followTail)
-                                Qt.callLater(positionViewAtEnd)
+                        Text {
+                            text: "Conversation"
+                            color: Theme.textPrimary
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 18
+                            font.weight: Font.DemiBold
                         }
 
-                        delegate: Item {
-                            id: messageDelegate
-                            required property string messageId
-                            required property string messageRole
-                            required property string text
-                            required property string messageState
+                        Item { Layout.fillWidth: true }
 
-                            width: ListView.view.width
-                            height: bubble.height + 8
+                        Text {
+                            text: window.agentAdapter.statusText
+                            color: window.agentAdapter.lastError.length > 0
+                                ? Theme.errorText
+                                : Theme.textSecondary
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 12
+                            horizontalAlignment: Text.AlignRight
+                            elide: Text.ElideRight
+                            Layout.maximumWidth: 430
+                        }
+                    }
 
-                            Rectangle {
-                                id: bubble
-                                width: Math.min(parent.width * 0.84, Math.max(220, messageText.implicitWidth + 38))
-                                height: messageColumn.implicitHeight + 24
-                                x: messageDelegate.messageRole === "user" ? parent.width - width - 8 : 8
-                                radius: Theme.radiusControl
-                                color: Theme.surface
-                                border.width: 1
-                                border.color: messageDelegate.messageRole === "user"
-                                    ? Qt.rgba(1, 102 / 255, 0, 0.22)
-                                    : Qt.rgba(1, 1, 1, 0.055)
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
 
-                                Column {
-                                    id: messageColumn
-                                    anchors.left: parent.left
-                                    anchors.right: parent.right
-                                    anchors.top: parent.top
-                                    anchors.margins: 12
-                                    spacing: 6
+                        Text {
+                            anchors.centerIn: parent
+                            visible: transcript.count === 0
+                            text: window.agentAdapter.connectionState === "ready"
+                                ? "Start a conversation with your AIOS"
+                                : "Connect Pi to load the conversation"
+                            color: Theme.textMuted
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 14
+                        }
 
-                                    Text {
-                                        text: messageDelegate.messageRole === "user" ? "You" : "Ornith"
-                                        color: messageDelegate.messageRole === "user"
-                                            ? Theme.accent
-                                            : Theme.textSecondary
-                                        font.family: Theme.fontFamily
-                                        font.pixelSize: 11
-                                        font.weight: Font.DemiBold
-                                    }
+                        ListView {
+                            id: transcript
+                            anchors.fill: parent
+                            clip: true
+                            reuseItems: true
+                            spacing: 10
+                            model: window.messageModel
+                            boundsBehavior: Flickable.StopAtBounds
+                            ScrollBar.vertical: ScrollBar { }
+                            property bool followTail: true
 
-                                    TextEdit {
-                                        id: messageText
-                                        width: parent.width
-                                        text: messageDelegate.text
-                                        readOnly: true
-                                        color: Theme.textPrimary
-                                        selectionColor: Theme.accent
-                                        selectedTextColor: Theme.surface
-                                        font.family: Theme.fontFamily
-                                        font.pixelSize: 14
-                                        wrapMode: TextEdit.Wrap
-                                        textFormat: TextEdit.PlainText
-                                        selectByMouse: true
-                                    }
+                            onMovementStarted: followTail = false
+                            onMovementEnded: followTail = atYEnd
+                            onCountChanged: {
+                                if (followTail)
+                                    Qt.callLater(positionViewAtEnd)
+                            }
+                            onContentHeightChanged: {
+                                if (followTail)
+                                    Qt.callLater(positionViewAtEnd)
+                            }
 
-                                    Text {
-                                        visible: messageDelegate.messageState !== "complete"
-                                        text: messageDelegate.messageState
-                                        color: Theme.textMuted
-                                        font.family: Theme.fontFamily
-                                        font.pixelSize: 10
+                            delegate: Item {
+                                id: messageDelegate
+                                required property string messageId
+                                required property string messageRole
+                                required property string text
+                                required property string messageState
+
+                                width: ListView.view.width
+                                height: bubble.height + 8
+
+                                Rectangle {
+                                    id: bubble
+                                    width: Math.min(parent.width * 0.84, Math.max(220, messageText.implicitWidth + 38))
+                                    height: messageColumn.implicitHeight + 24
+                                    x: messageDelegate.messageRole === "user" ? parent.width - width - 8 : 8
+                                    radius: Theme.radiusControl
+                                    color: Theme.surface
+                                    border.width: 1
+                                    border.color: messageDelegate.messageRole === "user"
+                                        ? Qt.rgba(1, 102 / 255, 0, 0.22)
+                                        : Qt.rgba(1, 1, 1, 0.055)
+
+                                    Column {
+                                        id: messageColumn
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.top: parent.top
+                                        anchors.margins: 12
+                                        spacing: 6
+
+                                        Text {
+                                            text: messageDelegate.messageRole === "user" ? "You" : "Ornith"
+                                            color: messageDelegate.messageRole === "user"
+                                                ? Theme.accent
+                                                : Theme.textSecondary
+                                            font.family: Theme.fontFamily
+                                            font.pixelSize: 11
+                                            font.weight: Font.DemiBold
+                                        }
+
+                                        TextEdit {
+                                            id: messageText
+                                            width: parent.width
+                                            text: messageDelegate.text
+                                            readOnly: true
+                                            color: Theme.textPrimary
+                                            selectionColor: Theme.accent
+                                            selectedTextColor: Theme.surface
+                                            font.family: Theme.fontFamily
+                                            font.pixelSize: 14
+                                            wrapMode: TextEdit.Wrap
+                                            textFormat: TextEdit.PlainText
+                                            selectByMouse: true
+                                        }
+
+                                        Text {
+                                            visible: messageDelegate.messageState !== "complete"
+                                            text: messageDelegate.messageState
+                                            color: Theme.textMuted
+                                            font.family: Theme.fontFamily
+                                            font.pixelSize: 10
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                }
 
-                InsetSurface {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 128
-                    radius: Theme.radiusControl
-                    padding: 12
-                    focused: composer.activeFocus
+                    InsetSurface {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 128
+                        radius: Theme.radiusControl
+                        padding: 12
+                        focused: composer.activeFocus
 
-                    TextArea {
-                        id: composer
-                        anchors.fill: parent
-                        enabled: window.agentAdapter.connectionState === "ready"
-                        color: Theme.textPrimary
-                        selectionColor: Theme.accent
-                        selectedTextColor: Theme.surface
-                        placeholderText: window.agentAdapter.canSend
-                            ? "Message Ornith…  Enter to send · Shift+Enter for a new line"
-                            : "Connect Pi and wait for the session to load"
-                        placeholderTextColor: Theme.textMuted
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 14
-                        wrapMode: TextEdit.Wrap
-                        selectByMouse: true
-                        background: null
-                        Accessible.name: "Message composer"
+                        TextArea {
+                            id: composer
+                            anchors.fill: parent
+                            enabled: window.agentAdapter.connectionState === "ready"
+                            color: Theme.textPrimary
+                            selectionColor: Theme.accent
+                            selectedTextColor: Theme.surface
+                            placeholderText: window.agentAdapter.canSend
+                                ? "Message Ornith…  Enter to send · Shift+Enter for a new line"
+                                : "Connect Pi and wait for the session to load"
+                            placeholderTextColor: Theme.textMuted
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 14
+                            wrapMode: TextEdit.Wrap
+                            selectByMouse: true
+                            background: null
+                            Accessible.name: "Message composer"
 
-                        Keys.onPressed: function(event) {
-                            if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
-                                    && !(event.modifiers & Qt.ShiftModifier)) {
-                                window.submitComposer()
-                                event.accepted = true
+                            Keys.onPressed: function(event) {
+                                if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                                        && !(event.modifiers & Qt.ShiftModifier)) {
+                                    window.submitComposer()
+                                    event.accepted = true
+                                }
                             }
                         }
                     }
-                }
 
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 12
-
-                    Text {
+                    RowLayout {
                         Layout.fillWidth: true
-                        text: window.agentAdapter.turnState === "running"
-                            ? "Turn in progress"
-                            : (window.agentAdapter.connectionState === "loading-session"
-                                ? "Loading existing session…"
-                                : "")
-                        color: Theme.textMuted
-                        font.family: Theme.fontFamily
-                        font.pixelSize: 11
-                    }
+                        spacing: 12
 
-                    NeuButton {
-                        text: "Stop"
-                        enabled: window.agentAdapter.canStop
-                        onClicked: window.agentAdapter.stopTurn()
-                    }
+                        Text {
+                            Layout.fillWidth: true
+                            text: window.agentAdapter.turnState === "running"
+                                ? "Turn in progress"
+                                : (window.agentAdapter.connectionState === "loading-session"
+                                    ? "Loading existing session…"
+                                    : "")
+                            color: Theme.textMuted
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 11
+                        }
 
-                    NeuButton {
-                        text: "Send"
-                        accentText: true
-                        enabled: window.agentAdapter.canSend && composer.text.trim().length > 0
-                        onClicked: window.submitComposer()
+                        NeuButton {
+                            text: "Stop"
+                            enabled: window.agentAdapter.canStop
+                            onClicked: window.agentAdapter.stopTurn()
+                        }
+
+                        NeuButton {
+                            text: "Send"
+                            accentText: true
+                            enabled: window.agentAdapter.canSend && composer.text.trim().length > 0
+                            onClicked: window.submitComposer()
+                        }
                     }
                 }
             }

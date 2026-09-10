@@ -13,11 +13,22 @@ from PySide6.QtWidgets import QApplication
 from controllers.agent_controller import AgentController
 from controllers.preflight_controller import PreflightController
 from controllers.sandbox_gate_controller import SandboxGateController
+from controllers.workspace_browser_controller import WorkspaceBrowserController
 from core.agent.runtime import PiLaunchSpec
 from core.preflight import HostRuntimeFacts
 from core.settings import AppSettings, SettingsStore
-from ui.adapters import AgentAdapter, PreflightAdapter, SandboxGateAdapter
-from ui.models import AgentProfileListModel, MessageListModel, PreflightListModel
+from ui.adapters import (
+    AgentAdapter,
+    PreflightAdapter,
+    SandboxGateAdapter,
+    WorkspaceBrowserAdapter,
+)
+from ui.models import (
+    AgentProfileListModel,
+    MessageListModel,
+    PreflightListModel,
+    WorkspaceTreeListModel,
+)
 
 
 def _application() -> QApplication:
@@ -39,12 +50,24 @@ def _unexpected_probe_runner():
     raise AssertionError("QML smoke test must not start preflight or sandbox probes")
 
 
+class _NoopWorkspaceScanRunner:
+    def submit(self, request_id, root, relative_directory, callback) -> None:
+        raise AssertionError("QML smoke test without a workspace must not scan files")
+
+    def cancel_all(self) -> None:
+        return
+
+
 def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) -> None:
     app = _application()
     controller = AgentController(
         SettingsStore(tmp_path / "settings.json"),
         _unexpected_transport,
         settings=AppSettings(),
+    )
+    workspace_controller = WorkspaceBrowserController(
+        lambda: controller.workspace,
+        _NoopWorkspaceScanRunner(),
     )
     facts = HostRuntimeFacts(
         os_name="Linux",
@@ -67,9 +90,11 @@ def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) ->
     )
     message_model = MessageListModel(controller)
     profile_model = AgentProfileListModel(controller)
+    workspace_model = WorkspaceTreeListModel(workspace_controller)
     preflight_model = PreflightListModel(preflight_controller)
     sandbox_gate_model = PreflightListModel(sandbox_gate_controller)
     adapter = AgentAdapter(controller)
+    workspace_adapter = WorkspaceBrowserAdapter(workspace_controller)
     preflight_adapter = PreflightAdapter(preflight_controller)
     sandbox_gate_adapter = SandboxGateAdapter(sandbox_gate_controller)
 
@@ -81,6 +106,8 @@ def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) ->
             "agentAdapter": adapter,
             "messageModel": message_model,
             "profileModel": profile_model,
+            "workspaceAdapter": workspace_adapter,
+            "workspaceModel": workspace_model,
             "preflightAdapter": preflight_adapter,
             "preflightModel": preflight_model,
             "sandboxGateAdapter": sandbox_gate_adapter,
@@ -100,10 +127,13 @@ def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) ->
     root = roots[0]
     assert root.property("title") == "Pi_UI"
     assert root.property("agentAdapter") is not None
+    assert root.property("workspaceAdapter") is not None
+    assert root.property("workspaceModel") is not None
     assert root.property("preflightAdapter") is not None
     assert root.property("preflightModel") is not None
     assert root.property("sandboxGateAdapter") is not None
     assert root.property("sandboxGateModel") is not None
+    assert workspace_controller.status_text == "No workspace selected"
     assert preflight_controller.status_text == "Preflight not run"
     assert sandbox_gate_controller.status_text == "Sandbox gate not run"
 
@@ -113,9 +143,17 @@ def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) ->
 
     header = root.findChild(QQuickItem, "headerSurface")
     connect_button = root.findChild(QQuickItem, "connectButton")
+    workspace_panel = root.findChild(QQuickItem, "workspacePanel")
+    conversation_surface = root.findChild(QQuickItem, "conversationSurface")
+    workspace_list = root.findChild(QQuickItem, "workspaceFileList")
     assert header is not None
     assert connect_button is not None
+    assert workspace_panel is not None
+    assert conversation_surface is not None
+    assert workspace_list is not None
     assert header.property("height") >= 133
+    assert float(workspace_panel.property("width")) >= 220
+    assert float(conversation_surface.property("width")) > 0
 
     button_origin = connect_button.mapToItem(header, QPointF(0, 0))
     button_right = button_origin.x() + float(connect_button.property("width"))
@@ -127,6 +165,7 @@ def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) ->
     assert not warnings, "QML warnings:\n" + "\n".join(warnings)
 
     root.setProperty("visible", False)
+    workspace_controller.cancel()
     sandbox_gate_controller.cancel()
     preflight_controller.cancel()
     controller.shutdown()

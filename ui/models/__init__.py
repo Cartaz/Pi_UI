@@ -3,5 +3,11 @@
 from .message_model import MessageListModel
 from .preflight_model import PreflightListModel
 from .profile_model import AgentProfileListModel
+from .workspace_tree_model import WorkspaceTreeListModel
 
-__all__ = ["AgentProfileListModel", "MessageListModel", "PreflightListModel"]
+__all__ = [
+    "AgentProfileListModel",
+    "MessageListModel",
+    "PreflightListModel",
+    "WorkspaceTreeListModel",
+]

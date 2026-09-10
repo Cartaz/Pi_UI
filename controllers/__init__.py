@@ -11,6 +11,11 @@ from .agent_controller import (
 )
 from .preflight_controller import PreflightController, PreflightControllerError
 from .sandbox_gate_controller import SandboxGateController, SandboxGateControllerError
+from .workspace_browser_controller import (
+    VisibleWorkspaceEntry,
+    WorkspaceBrowserController,
+    WorkspaceBrowserError,
+)
 
 __all__ = [
     "AgentController",
@@ -24,4 +29,7 @@ __all__ = [
     "RuntimeProfileSource",
     "SandboxGateController",
     "SandboxGateControllerError",
+    "VisibleWorkspaceEntry",
+    "WorkspaceBrowserController",
+    "WorkspaceBrowserError",
 ]
