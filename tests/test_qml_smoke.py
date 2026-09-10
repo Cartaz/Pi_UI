@@ -14,6 +14,7 @@ from controllers.agent_controller import AgentController
 from controllers.preflight_controller import PreflightController
 from controllers.sandbox_gate_controller import SandboxGateController
 from controllers.workspace_browser_controller import WorkspaceBrowserController
+from controllers.workspace_document_controller import WorkspaceDocumentController
 from core.agent.runtime import PiLaunchSpec
 from core.preflight import HostRuntimeFacts
 from core.settings import AppSettings, SettingsStore
@@ -22,6 +23,7 @@ from ui.adapters import (
     PreflightAdapter,
     SandboxGateAdapter,
     WorkspaceBrowserAdapter,
+    WorkspaceDocumentAdapter,
 )
 from ui.models import (
     AgentProfileListModel,
@@ -58,6 +60,14 @@ class _NoopWorkspaceScanRunner:
         return
 
 
+class _NoopDocumentLoadRunner:
+    def submit(self, request_id, root, relative_path, max_bytes, callback) -> None:
+        raise AssertionError("QML smoke test without a selection must not load documents")
+
+    def cancel_all(self) -> None:
+        return
+
+
 def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) -> None:
     app = _application()
     controller = AgentController(
@@ -68,6 +78,10 @@ def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) ->
     workspace_controller = WorkspaceBrowserController(
         lambda: controller.workspace,
         _NoopWorkspaceScanRunner(),
+    )
+    document_controller = WorkspaceDocumentController(
+        lambda: controller.workspace,
+        _NoopDocumentLoadRunner(),
     )
     facts = HostRuntimeFacts(
         os_name="Linux",
@@ -95,6 +109,7 @@ def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) ->
     sandbox_gate_model = PreflightListModel(sandbox_gate_controller)
     adapter = AgentAdapter(controller)
     workspace_adapter = WorkspaceBrowserAdapter(workspace_controller)
+    document_adapter = WorkspaceDocumentAdapter(document_controller)
     preflight_adapter = PreflightAdapter(preflight_controller)
     sandbox_gate_adapter = SandboxGateAdapter(sandbox_gate_controller)
 
@@ -108,6 +123,7 @@ def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) ->
             "profileModel": profile_model,
             "workspaceAdapter": workspace_adapter,
             "workspaceModel": workspace_model,
+            "documentAdapter": document_adapter,
             "preflightAdapter": preflight_adapter,
             "preflightModel": preflight_model,
             "sandboxGateAdapter": sandbox_gate_adapter,
@@ -129,11 +145,13 @@ def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) ->
     assert root.property("agentAdapter") is not None
     assert root.property("workspaceAdapter") is not None
     assert root.property("workspaceModel") is not None
+    assert root.property("documentAdapter") is not None
     assert root.property("preflightAdapter") is not None
     assert root.property("preflightModel") is not None
     assert root.property("sandboxGateAdapter") is not None
     assert root.property("sandboxGateModel") is not None
     assert workspace_controller.status_text == "No workspace selected"
+    assert document_controller.status_text == "No workspace selected"
     assert preflight_controller.status_text == "Preflight not run"
     assert sandbox_gate_controller.status_text == "Sandbox gate not run"
 
@@ -146,14 +164,20 @@ def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) ->
     workspace_panel = root.findChild(QQuickItem, "workspacePanel")
     conversation_surface = root.findChild(QQuickItem, "conversationSurface")
     workspace_list = root.findChild(QQuickItem, "workspaceFileList")
+    document_panel = root.findChild(QQuickItem, "documentPanel")
+    document_drawer_panel = root.findChild(QQuickItem, "documentDrawerPanel")
     assert header is not None
     assert connect_button is not None
     assert workspace_panel is not None
     assert conversation_surface is not None
     assert workspace_list is not None
+    assert document_panel is not None
+    assert document_drawer_panel is not None
     assert header.property("height") >= 133
     assert float(workspace_panel.property("width")) >= 220
     assert float(conversation_surface.property("width")) > 0
+    assert not bool(root.property("wideDocumentLayout"))
+    assert not bool(document_panel.property("visible"))
 
     button_origin = connect_button.mapToItem(header, QPointF(0, 0))
     button_right = button_origin.x() + float(connect_button.property("width"))
@@ -162,9 +186,17 @@ def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) ->
     assert button_origin.y() >= 0
     assert button_right <= float(header.property("width"))
     assert button_bottom <= float(header.property("height"))
+
+    root.setProperty("width", 1280)
+    app.processEvents()
+    assert bool(root.property("wideDocumentLayout"))
+    assert bool(document_panel.property("visible"))
+    assert float(document_panel.property("width")) >= 280
+    assert float(conversation_surface.property("width")) > 0
     assert not warnings, "QML warnings:\n" + "\n".join(warnings)
 
     root.setProperty("visible", False)
+    document_controller.cancel()
     workspace_controller.cancel()
     sandbox_gate_controller.cancel()
     preflight_controller.cancel()
