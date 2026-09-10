@@ -11,11 +11,11 @@ RaisedSurface {
     required property var workspaceModel
 
     radius: Theme.radiusMain
-    padding: 16
+    padding: 14
 
     ColumnLayout {
         anchors.fill: parent
-        spacing: 10
+        spacing: 8
 
         RowLayout {
             Layout.fillWidth: true
@@ -47,8 +47,8 @@ RaisedSurface {
 
             NeuButton {
                 text: "Refresh"
-                Layout.preferredWidth: 96
-                Layout.preferredHeight: 38
+                Layout.preferredWidth: 88
+                Layout.preferredHeight: 34
                 enabled: panel.workspaceAdapter.hasWorkspace && !panel.workspaceAdapter.loading
                 onClicked: panel.workspaceAdapter.refresh()
             }
@@ -86,10 +86,10 @@ RaisedSurface {
                 id: fileList
                 objectName: "workspaceFileList"
                 anchors.fill: parent
-                anchors.margins: 5
+                anchors.margins: 4
                 clip: true
                 reuseItems: true
-                spacing: 2
+                spacing: 0
                 model: panel.workspaceModel
                 activeFocusOnTab: true
                 boundsBehavior: Flickable.StopAtBounds
@@ -121,14 +121,14 @@ RaisedSurface {
                     required property bool hiddenEntry
 
                     width: ListView.view.width
-                    height: 36
+                    height: 30
 
                     Rectangle {
                         anchors.fill: parent
-                        radius: Theme.radiusSmall
+                        radius: 8
                         color: fileRow.ListView.isCurrentItem
                             ? Qt.rgba(0, 0, 0, 0.24)
-                            : "transparent"
+                            : (rowHover.hovered ? Qt.rgba(1, 1, 1, 0.025) : "transparent")
                         border.width: fileRow.ListView.isCurrentItem && fileList.activeFocus ? 1 : 0
                         border.color: Theme.accent
                     }
@@ -137,32 +137,45 @@ RaisedSurface {
                         anchors.left: parent.left
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
-                        anchors.leftMargin: 8 + fileRow.depth * 14
-                        anchors.rightMargin: 8
-                        spacing: 7
+                        anchors.leftMargin: 4 + fileRow.depth * 12
+                        anchors.rightMargin: 6
+                        spacing: 5
 
                         Text {
-                            width: 14
-                            text: fileRow.loading
-                                ? "…"
-                                : (fileRow.canExpand
-                                    ? (fileRow.expanded ? "⌄" : "›")
-                                    : (fileRow.entryKind === "symlink" ? "↗" : "·"))
-                            color: fileRow.canExpand ? Theme.accent : Theme.textMuted
+                            width: 12
+                            text: fileRow.canExpand
+                                ? (fileRow.loading ? "…" : (fileRow.expanded ? "⌄" : "›"))
+                                : ""
+                            color: Theme.accent
                             font.family: Theme.fontFamily
-                            font.pixelSize: 14
+                            font.pixelSize: 13
                             horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+
+                        WorkspaceEntryIcon {
+                            width: 16
+                            height: 16
+                            anchors.verticalCenter: parent.verticalCenter
+                            kind: fileRow.entryKind
+                            expanded: fileRow.expanded
+                            muted: fileRow.hiddenEntry
                         }
 
                         Text {
-                            width: parent.width - 24
+                            width: parent.width - 38
                             text: fileRow.name
                             color: fileRow.hiddenEntry ? Theme.textSecondary : Theme.textPrimary
                             font.family: Theme.fontFamily
                             font.pixelSize: 12
+                            font.weight: fileRow.entryKind === "directory" ? Font.Medium : Font.Normal
                             elide: Text.ElideMiddle
                             verticalAlignment: Text.AlignVCenter
                         }
+                    }
+
+                    HoverHandler {
+                        id: rowHover
                     }
 
                     TapHandler {
