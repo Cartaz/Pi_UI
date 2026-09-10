@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import os
-import stat
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+
+from core.workspace_access import (
+    WorkspaceAccessError,
+    open_directory_parts_fd,
+    relative_parts,
+    resolve_workspace_root,
+)
 
 
 class WorkspaceBrowseError(RuntimeError):
@@ -62,17 +68,16 @@ def scan_directory(
     """
 
     try:
-        root_resolved = root.expanduser().resolve(strict=True)
-    except OSError as exc:
-        return WorkspaceScanResult(relative_directory, (), f"workspace unavailable: {exc}")
-    if not root_resolved.is_dir():
-        return WorkspaceScanResult(relative_directory, (), "workspace root is not a directory")
-
-    try:
-        parts = _relative_parts(relative_directory)
-        directory_fd = _open_directory_fd(root_resolved, parts)
-    except WorkspaceBrowseError as exc:
-        return WorkspaceScanResult(relative_directory, (), str(exc))
+        root_resolved = resolve_workspace_root(root)
+        parts = relative_parts(relative_directory)
+        directory_fd = open_directory_parts_fd(root_resolved, parts)
+    except WorkspaceAccessError as exc:
+        message = str(exc)
+        if message == "absolute workspace paths are not allowed":
+            message = "absolute browser paths are not allowed"
+        if message == "secure workspace access is unavailable on this platform":
+            message = "secure directory browsing is unavailable on this platform"
+        return WorkspaceScanResult(relative_directory, (), message)
 
     prefix = "/".join(parts)
     entries: list[WorkspaceEntry] = []
@@ -89,49 +94,6 @@ def scan_directory(
 
     entries.sort(key=_entry_sort_key)
     return WorkspaceScanResult(relative_directory, tuple(entries))
-
-
-def _relative_parts(relative_directory: str) -> tuple[str, ...]:
-    relative = Path(relative_directory)
-    if relative.is_absolute():
-        raise WorkspaceBrowseError("absolute browser paths are not allowed")
-    parts = tuple(part for part in relative.parts if part not in {"", "."})
-    if any(part == ".." for part in parts):
-        raise WorkspaceBrowseError("parent traversal is not allowed")
-    return parts
-
-
-def _open_directory_fd(root: Path, parts: tuple[str, ...]) -> int:
-    required_flags = ("O_DIRECTORY", "O_NOFOLLOW")
-    if any(not hasattr(os, name) for name in required_flags):
-        raise WorkspaceBrowseError("secure directory browsing is unavailable on this platform")
-
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    if hasattr(os, "O_CLOEXEC"):
-        flags |= os.O_CLOEXEC
-
-    try:
-        current_fd = os.open(root, flags)
-    except OSError as exc:
-        raise WorkspaceBrowseError(f"workspace unavailable: {exc}") from exc
-
-    try:
-        for part in parts:
-            try:
-                metadata = os.stat(part, dir_fd=current_fd, follow_symlinks=False)
-                if stat.S_ISLNK(metadata.st_mode):
-                    raise WorkspaceBrowseError("symlink directories are not traversable")
-                next_fd = os.open(part, flags, dir_fd=current_fd)
-            except WorkspaceBrowseError:
-                raise
-            except OSError as exc:
-                raise WorkspaceBrowseError(f"directory path is not traversable: {exc}") from exc
-            os.close(current_fd)
-            current_fd = next_fd
-        return current_fd
-    except BaseException:
-        os.close(current_fd)
-        raise
 
 
 def _entry_from_dirent(prefix: str, item: os.DirEntry[str]) -> WorkspaceEntry:
