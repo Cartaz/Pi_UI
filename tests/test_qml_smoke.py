@@ -5,8 +5,9 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QObject, QPointF
+from PySide6.QtCore import QPointF
 from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuick import QQuickItem
 from PySide6.QtWidgets import QApplication
 
 from controllers.agent_controller import AgentController
@@ -110,8 +111,8 @@ def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) ->
     root.setProperty("height", root.property("minimumHeight"))
     app.processEvents()
 
-    header = root.findChild(QObject, "headerSurface")
-    connect_button = root.findChild(QObject, "connectButton")
+    header = root.findChild(QQuickItem, "headerSurface")
+    connect_button = root.findChild(QQuickItem, "connectButton")
     assert header is not None
     assert connect_button is not None
     assert header.property("height") >= 133
