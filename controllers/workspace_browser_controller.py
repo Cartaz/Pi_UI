@@ -125,6 +125,17 @@ class WorkspaceBrowserController:
         self._emit_state()
         self._request_scan("")
 
+    def activate_entry(self, index: int) -> str | None:
+        """Toggle a directory or return the relative path of a leaf entry."""
+
+        if not 0 <= index < len(self._items):
+            raise WorkspaceBrowserError("workspace row index is out of range")
+        item = self._items[index]
+        if item.can_expand:
+            self.toggle_directory(index)
+            return None
+        return item.relative_path
+
     def toggle_directory(self, index: int) -> None:
         if not 0 <= index < len(self._items):
             raise WorkspaceBrowserError("workspace row index is out of range")
