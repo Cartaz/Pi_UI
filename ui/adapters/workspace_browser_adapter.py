@@ -12,6 +12,7 @@ from controllers.workspace_browser_controller import (
 
 class WorkspaceBrowserAdapter(QObject):
     stateChanged = Signal()
+    leafActivated = Signal(str)
 
     def __init__(self, controller: WorkspaceBrowserController) -> None:
         super().__init__()
@@ -51,6 +52,18 @@ class WorkspaceBrowserAdapter(QObject):
         except Exception as exc:
             self._operation_error = str(exc)
             self.stateChanged.emit()
+
+    @Slot(int)
+    def activateRow(self, index: int) -> None:  # noqa: N802
+        self._operation_error = ""
+        try:
+            relative_path = self._controller.activate_entry(index)
+        except WorkspaceBrowserError as exc:
+            self._operation_error = str(exc)
+            self.stateChanged.emit()
+            return
+        if relative_path is not None:
+            self.leafActivated.emit(relative_path)
 
     @Slot(int)
     def toggleRow(self, index: int) -> None:  # noqa: N802
