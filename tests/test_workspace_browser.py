@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from core.workspace_browser import WorkspaceEntryKind, scan_directory
@@ -42,6 +43,39 @@ def test_symlink_is_visible_but_never_expandable_or_traversable(tmp_path: Path) 
     escaped = scan_directory(tmp_path, "escape")
     assert escaped.entries == ()
     assert escaped.error == "symlink directories are not traversable"
+
+
+def test_directory_replaced_by_symlink_cannot_race_secure_open(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    safe = tmp_path / "safe"
+    safe.mkdir()
+    (safe / "inside.txt").write_text("inside", encoding="utf-8")
+    outside = tmp_path.parent / f"{tmp_path.name}-race-outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("secret", encoding="utf-8")
+
+    real_open = os.open
+    swapped = False
+
+    def racing_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal swapped
+        if path == "safe" and dir_fd is not None and not swapped:
+            swapped = True
+            safe.rename(tmp_path / "safe-original")
+            safe.symlink_to(outside, target_is_directory=True)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr("core.workspace_browser.os.open", racing_open)
+
+    result = scan_directory(tmp_path, "safe")
+
+    assert swapped
+    assert result.entries == ()
+    assert result.error is not None
+    assert "not traversable" in result.error
+    assert "secret.txt" not in {entry.name for entry in result.entries}
 
 
 def test_scan_rejects_absolute_and_parent_paths(tmp_path: Path) -> None:
