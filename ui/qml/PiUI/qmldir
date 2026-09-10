@@ -3,5 +3,6 @@ singleton Theme 1.0 Theme.qml
 RaisedSurface 1.0 RaisedSurface.qml
 InsetSurface 1.0 InsetSurface.qml
 NeuButton 1.0 NeuButton.qml
+WorkspaceEntryIcon 1.0 WorkspaceEntryIcon.qml
 WorkspacePanel 1.0 WorkspacePanel.qml
 Main 1.0 Main.qml
