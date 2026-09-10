@@ -5,6 +5,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QObject, QPointF
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication
 
@@ -104,6 +105,24 @@ def test_qml_shell_loads_offscreen_with_declared_dependencies(tmp_path: Path) ->
     assert root.property("sandboxGateModel") is not None
     assert preflight_controller.status_text == "Preflight not run"
     assert sandbox_gate_controller.status_text == "Sandbox gate not run"
+
+    root.setProperty("width", root.property("minimumWidth"))
+    root.setProperty("height", root.property("minimumHeight"))
+    app.processEvents()
+
+    header = root.findChild(QObject, "headerSurface")
+    connect_button = root.findChild(QObject, "connectButton")
+    assert header is not None
+    assert connect_button is not None
+    assert header.property("height") >= 133
+
+    button_origin = connect_button.mapToItem(header, QPointF(0, 0))
+    button_right = button_origin.x() + float(connect_button.property("width"))
+    button_bottom = button_origin.y() + float(connect_button.property("height"))
+    assert button_origin.x() >= 0
+    assert button_origin.y() >= 0
+    assert button_right <= float(header.property("width"))
+    assert button_bottom <= float(header.property("height"))
     assert not warnings, "QML warnings:\n" + "\n".join(warnings)
 
     root.setProperty("visible", False)
