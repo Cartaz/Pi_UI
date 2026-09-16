@@ -11,7 +11,8 @@ from core.settings import AgentSettings
 
 _CHECK_IDS = (
     "workspace-root",
-    "workspace-write",
+    "workspace-readonly",
+    "state-write",
     "outside-direct",
     "symlink-escape",
     "child-inherits",
@@ -72,6 +73,10 @@ def test_prepare_uses_canonical_policy_and_only_app_owned_scratch(tmp_path: Path
         assert (plan.scratch_dir / "probe.mjs").is_file()
         assert (plan.scratch_dir / "escape-link").is_symlink()
         assert (plan.scratch_dir / "escape-link").resolve() == plan.outside_sentinel
+        probe_text = (plan.scratch_dir / "probe.mjs").read_text(encoding="utf-8")
+        assert 'add("workspace-readonly", passed, detail)' in probe_text
+        assert 'add("state-write", roundTrip' in probe_text
+        assert "/workspace/.pi-ui-readonly-.m0-gate-run-1" in probe_text
 
         args = plan.probe.arguments
         assert args[:4] == (
@@ -80,8 +85,11 @@ def test_prepare_uses_canonical_policy_and_only_app_owned_scratch(tmp_path: Path
             "--die-with-parent",
             "--new-session",
         )
-        assert "--bind" in args
-        assert str(workspace.resolve()) in args
+        assert _contains_triplet(args, "--ro-bind", str(workspace.resolve()), "/workspace")
+        assert _contains_triplet(
+            args, "--bind", str(workspace / ".pi-agent"), "/workspace/.pi-agent"
+        )
+        assert args.count("--bind") == 1
         assert str(outside_root.resolve()) not in args
         separator = args.index("--")
         assert args[separator + 1] == str(node)
@@ -107,6 +115,23 @@ def test_prepare_uses_canonical_policy_and_only_app_owned_scratch(tmp_path: Path
     assert not plan.scratch_dir.exists()
     assert not plan.outside_run_dir.exists()
     assert not (workspace / ".pi-agent").exists()
+
+
+def test_prepare_fails_closed_if_readonly_probe_path_exists(tmp_path: Path) -> None:
+    workspace = tmp_path / "AIOS"
+    workspace.mkdir()
+    probe_path = workspace / ".pi-ui-readonly-.m0-gate-run-1"
+    probe_path.write_text("do-not-touch", encoding="utf-8")
+    settings, node = _settings(tmp_path)
+
+    with pytest.raises(SandboxGateError, match="probe path already exists"):
+        SandboxGateService(id_factory=lambda: "run-1").prepare(
+            settings,
+            workspace=workspace,
+            node_executable=str(node),
+            outside_root=tmp_path / "state",
+        )
+    assert probe_path.read_text(encoding="utf-8") == "do-not-touch"
 
 
 def test_prepare_preserves_preexisting_agent_directory(tmp_path: Path) -> None:
@@ -191,8 +216,8 @@ def test_parse_expected_confinement_failure_is_not_process_protocol_failure(
         "checks": [
             {
                 "id": check_id,
-                "passed": check_id != "symlink-escape",
-                "detail": "read unexpectedly succeeded" if check_id == "symlink-escape" else "ok",
+                "passed": check_id != "workspace-readonly",
+                "detail": "write unexpectedly succeeded" if check_id == "workspace-readonly" else "ok",
             }
             for check_id in _CHECK_IDS
         ],
@@ -214,7 +239,7 @@ def test_parse_expected_confinement_failure_is_not_process_protocol_failure(
     assert report.passed is False
     failed = [check for check in report.checks if check.status == PreflightStatus.FAIL]
     assert len(failed) == 1
-    assert failed[0].check_id == "sandbox-symlink-escape"
+    assert failed[0].check_id == "sandbox-workspace-readonly"
 
 
 def test_malformed_gate_payload_fails_closed(tmp_path: Path) -> None:
@@ -260,3 +285,7 @@ def test_gate_rejects_node_outside_sandbox_mounts(tmp_path: Path) -> None:
             node_executable=str(host_only_node),
             outside_root=tmp_path / "state",
         )
+
+
+def _contains_triplet(args: tuple[str, ...], first: str, second: str, third: str) -> bool:
+    return any(args[i : i + 3] == (first, second, third) for i in range(len(args) - 2))
