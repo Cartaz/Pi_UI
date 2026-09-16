@@ -53,16 +53,15 @@ def test_sandbox_launch_spec_matches_aios_confinement(tmp_path: Path) -> None:
     assert _contains_triplet(args, "--symlink", "usr/sbin", "/sbin")
     assert _contains_triplet(args, "--symlink", "usr/lib", "/lib")
     assert _contains_triplet(args, "--symlink", "usr/lib64", "/lib64")
+    assert _contains_triplet(args, "--ro-bind", str(tmp_path.resolve()), "/workspace")
+    assert _contains_triplet(
+        args, "--bind", str(tmp_path.resolve() / ".pi-agent"), "/workspace/.pi-agent"
+    )
     assert "--tmpfs" in args
     assert "/home" in args
     assert "/home/aios" in args
     assert "/home/tester" not in args
 
-    bind_index = args.index("--bind")
-    assert args[bind_index + 1 : bind_index + 3] == (
-        str(tmp_path.resolve()),
-        "/workspace",
-    )
     separator = args.index("--")
     assert args[separator + 1 :] == (
         "/opt/pi-agent/bin/pi",
@@ -135,39 +134,34 @@ def test_prepare_runtime_paths_rejects_missing_workspace(tmp_path: Path) -> None
         prepare_runtime_paths(PiRuntimePaths.for_workspace(missing))
 
 
-def test_direct_launch_is_explicit_and_uses_host_paths(tmp_path: Path) -> None:
-    settings = replace(
-        AgentSettings(),
-        sandbox_enabled=False,
-        executable="/opt/pi-agent/bin/pi",
-        skip_version_check=False,
-        offline_startup=True,
-    )
-    spec = build_launch_spec(
-        settings,
-        working_directory=tmp_path,
-        base_environment={
-            "HOME": "/home/tester-real",
-            "PATH": "/usr/local/bin:/usr/bin",
-            "USER": "tester",
-        },
-    )
+def test_prepare_runtime_paths_rejects_symlinked_state(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    workspace = tmp_path / "AIOS"
+    workspace.mkdir()
+    (workspace / ".pi-agent").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(RuntimeConfigurationError, match="real directory"):
+        prepare_runtime_paths(PiRuntimePaths.for_workspace(workspace))
 
-    assert spec.executable == "/opt/pi-agent/bin/pi"
-    assert spec.arguments[:4] == (
-        "--mode",
-        "rpc",
-        "--session-dir",
-        str(tmp_path.resolve() / ".pi-agent/sessions"),
-    )
-    assert spec.environment["HOME"] == "/home/tester-real"
-    assert spec.environment["PATH"] == "/usr/local/bin:/usr/bin"
-    assert spec.environment["PI_CODING_AGENT_DIR"] == str(
-        tmp_path.resolve() / ".pi-agent"
-    )
-    assert spec.environment["PI_TELEMETRY"] == "0"
-    assert spec.environment["PI_OFFLINE"] == "1"
-    assert "PI_SKIP_VERSION_CHECK" not in spec.environment
+
+def test_prepare_runtime_paths_rejects_symlinked_session_dir(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    workspace = tmp_path / "AIOS"
+    (workspace / ".pi-agent").mkdir(parents=True)
+    (workspace / ".pi-agent/sessions").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(RuntimeConfigurationError, match="real directory"):
+        prepare_runtime_paths(PiRuntimePaths.for_workspace(workspace))
+
+
+def test_direct_launch_is_rejected_even_for_explicit_settings(tmp_path: Path) -> None:
+    settings = replace(AgentSettings(), sandbox_enabled=False)
+    with pytest.raises(RuntimeConfigurationError, match="Bubblewrap is mandatory"):
+        build_launch_spec(
+            settings,
+            working_directory=tmp_path,
+            base_environment={"HOME": "/home/tester-real"},
+        )
 
 
 def _contains_triplet(args: tuple[str, ...], first: str, second: str, third: str) -> bool:
