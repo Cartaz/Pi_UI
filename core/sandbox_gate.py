@@ -1,4 +1,4 @@
-"""Active M0 Bubblewrap confinement gate using the canonical sandbox policy."""
+"""Active Bubblewrap confinement gate using the canonical runtime mount policy."""
 
 from __future__ import annotations
 
@@ -27,7 +27,8 @@ _GATE_TIMEOUT_MS: Final = 10_000
 _RUN_ID_RE: Final = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _EXPECTED_CHECKS: Final = (
     ("workspace-root", "Sandbox working directory"),
-    ("workspace-write", "AIOS workspace is writable"),
+    ("workspace-readonly", "Workspace documents are read-only"),
+    ("state-write", "Pi session/config state is writable"),
     ("outside-direct", "Outside sentinel is unreadable"),
     ("symlink-escape", "Symlink cannot escape workspace"),
     ("child-inherits", "Child process inherits confinement"),
@@ -71,14 +72,21 @@ function writeDenied(path) {
 
 add("workspace-root", process.cwd() === "/workspace", process.cwd());
 
+// This path must not exist in the host workspace. The randomized gate ID and
+// the host-side exclusivity check prevent an EEXIST false positive.
+{
+  const [passed, detail] = writeDenied("/workspace/.pi-ui-readonly-__RUN_DIR__");
+  add("workspace-readonly", passed, detail);
+}
+
 const insideWrite = `${scratch}/inside-write.txt`;
 try {
-  fs.writeFileSync(insideWrite, "workspace-ok", { flag: "wx" });
-  const roundTrip = fs.readFileSync(insideWrite, "utf8") === "workspace-ok";
+  fs.writeFileSync(insideWrite, "state-ok", { flag: "wx" });
+  const roundTrip = fs.readFileSync(insideWrite, "utf8") === "state-ok";
   fs.unlinkSync(insideWrite);
-  add("workspace-write", roundTrip, roundTrip ? "round-trip ok" : "round-trip mismatch");
+  add("state-write", roundTrip, roundTrip ? "round-trip ok" : "round-trip mismatch");
 } catch (error) {
-  add("workspace-write", false, error?.code || error?.message || "workspace write failed");
+  add("state-write", false, error?.code || error?.message || "state write failed");
 }
 
 {
@@ -209,6 +217,11 @@ class SandboxGateService:
         scratch_dir = paths.host_agent_dir / f".m0-gate-{run_id}"
         outside_run_dir = outside_base / f"m0-gate-{run_id}"
         outside_sentinel = outside_run_dir / "outside-sentinel.txt"
+        # Avoid a false pass if another process has pre-created the probe path:
+        # writeDenied uses O_EXCL, which would otherwise confuse EEXIST with EROFS.
+        document_probe = workspace / f".pi-ui-readonly-.m0-gate-{run_id}"
+        if document_probe.exists() or document_probe.is_symlink():
+            raise SandboxGateError("read-only probe path already exists")
 
         try:
             scratch_dir.mkdir(mode=0o700)
