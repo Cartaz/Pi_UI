@@ -13,9 +13,10 @@ from core.sandbox import (
 from core.settings import AgentSettings
 
 
-def test_canonical_policy_exposes_only_declared_runtime_and_workspace(tmp_path: Path) -> None:
+def test_canonical_policy_exposes_only_declared_runtime_and_state(tmp_path: Path) -> None:
     workspace = tmp_path / "AIOS"
     workspace.mkdir()
+    (workspace / ".pi-agent").mkdir()
     runtime_root = tmp_path / "runtime"
     runtime_root.mkdir()
     settings = AgentSettings(
@@ -40,7 +41,10 @@ def test_canonical_policy_exposes_only_declared_runtime_and_workspace(tmp_path: 
     )
     assert _contains_triplet(args, "--ro-bind", "/usr", "/usr")
     assert _contains_triplet(args, "--ro-bind", str(runtime_root), str(runtime_root))
-    assert _contains_triplet(args, "--bind", str(workspace.resolve()), "/workspace")
+    assert _contains_triplet(args, "--ro-bind", str(workspace.resolve()), "/workspace")
+    assert _contains_triplet(args, "--bind", str(workspace / ".pi-agent"), "/workspace/.pi-agent")
+    assert not _contains_triplet(args, "--bind", str(workspace.resolve()), "/workspace")
+    assert args.count("--bind") == 1
     assert "--dir" in args
     assert str(SANDBOX_HOME) in args
     assert "/run/user" not in args
@@ -49,25 +53,43 @@ def test_canonical_policy_exposes_only_declared_runtime_and_workspace(tmp_path: 
     assert args[separator + 1 :] == command
 
 
+def test_canonical_policy_rejects_symlinked_writable_state(tmp_path: Path) -> None:
+    workspace = tmp_path / "AIOS"
+    workspace.mkdir()
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (workspace / ".pi-agent").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(SandboxConfigurationError, match="real directory"):
+        build_bubblewrap_arguments(
+            AgentSettings(),
+            host_workspace=workspace,
+            sandbox_workspace=PurePosixPath("/workspace"),
+            command=("/usr/bin/node",),
+        )
+
+
+def test_canonical_policy_rejects_different_workspace_mount(tmp_path: Path) -> None:
+    with pytest.raises(SandboxConfigurationError, match="must be /workspace"):
+        build_bubblewrap_arguments(
+            AgentSettings(),
+            host_workspace=tmp_path,
+            sandbox_workspace=PurePosixPath("/host"),
+            command=("/usr/bin/node",),
+        )
+
+
 def test_command_visibility_matches_mounted_trees(tmp_path: Path) -> None:
     runtime_root = tmp_path / "runtime"
 
+    assert command_is_visible_in_sandbox("/usr/bin/node", runtime_root=str(runtime_root))
     assert command_is_visible_in_sandbox(
-        "/usr/bin/node",
-        runtime_root=str(runtime_root),
-    )
-    assert command_is_visible_in_sandbox(
-        str(runtime_root / "bin" / "node"),
-        runtime_root=str(runtime_root),
+        str(runtime_root / "bin" / "node"), runtime_root=str(runtime_root)
     )
     assert not command_is_visible_in_sandbox(
         str(tmp_path / "home" / "tester" / ".local" / "bin" / "node"),
         runtime_root=str(runtime_root),
     )
-    assert not command_is_visible_in_sandbox(
-        "node",
-        runtime_root=str(runtime_root),
-    )
+    assert not command_is_visible_in_sandbox("node", runtime_root=str(runtime_root))
 
 
 def test_policy_rejects_command_from_unmounted_host_tree(tmp_path: Path) -> None:
@@ -91,19 +113,8 @@ def test_policy_rejects_command_from_unmounted_host_tree(tmp_path: Path) -> None
 @pytest.mark.parametrize(
     "runtime_root",
     [
-        "/",
-        "/home",
-        "/root",
-        "/run",
-        "/etc",
-        "/var",
-        "/tmp",
-        "/mnt",
-        "/media",
-        "/opt",
-        "/srv",
-        "/usr",
-        "/usr/local",
+        "/", "/home", "/root", "/run", "/etc", "/var", "/tmp",
+        "/mnt", "/media", "/opt", "/srv", "/usr", "/usr/local",
     ],
 )
 def test_policy_rejects_overbroad_runtime_mounts(tmp_path: Path, runtime_root: str) -> None:
@@ -123,13 +134,12 @@ def test_policy_rejects_overbroad_runtime_mounts(tmp_path: Path, runtime_root: s
         )
 
 
-def test_policy_rejects_runtime_overlapping_writable_workspace(tmp_path: Path) -> None:
+def test_policy_rejects_runtime_overlapping_workspace(tmp_path: Path) -> None:
     workspace = tmp_path / "AIOS"
     workspace.mkdir()
     runtime_root = workspace / ".runtime"
     settings = AgentSettings(
-        executable=str(runtime_root / "bin" / "pi"),
-        runtime_root=str(runtime_root),
+        executable=str(runtime_root / "bin" / "pi"), runtime_root=str(runtime_root)
     )
 
     with pytest.raises(SandboxConfigurationError, match="must not overlap"):
