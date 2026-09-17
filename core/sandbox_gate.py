@@ -66,14 +66,14 @@ function writeDenied(path) {
     try { fs.unlinkSync(path); } catch {}
     return [false, "write unexpectedly succeeded"];
   } catch (error) {
-    return [true, error?.code || error?.name || "write denied"];
+    // EACCES, EEXIST and ENOENT do not establish a read-only mount.
+    return [error?.code === "EROFS", error?.code || error?.name || "write denied"];
   }
 }
 
 add("workspace-root", process.cwd() === "/workspace", process.cwd());
 
-// This path must not exist in the host workspace. The randomized gate ID and
-// the host-side exclusivity check prevent an EEXIST false positive.
+// This path must not already exist on the host; EEXIST also fails explicitly.
 {
   const [passed, detail] = writeDenied("/workspace/.pi-ui-readonly-__RUN_DIR__");
   add("workspace-readonly", passed, detail);
@@ -217,8 +217,6 @@ class SandboxGateService:
         scratch_dir = paths.host_agent_dir / f".m0-gate-{run_id}"
         outside_run_dir = outside_base / f"m0-gate-{run_id}"
         outside_sentinel = outside_run_dir / "outside-sentinel.txt"
-        # Avoid a false pass if another process has pre-created the probe path:
-        # writeDenied uses O_EXCL, which would otherwise confuse EEXIST with EROFS.
         document_probe = workspace / f".pi-ui-readonly-.m0-gate-{run_id}"
         if document_probe.exists() or document_probe.is_symlink():
             raise SandboxGateError("read-only probe path already exists")
@@ -320,6 +318,10 @@ class SandboxGateService:
                 or not isinstance(detail, str)
             ):
                 return self._process_failure(result, "Sandbox gate returned ambiguous checks")
+            # Even a malformed or stale probe claiming success cannot turn EEXIST,
+            # EACCES or ENOENT into evidence of a read-only filesystem.
+            if check_id in {"workspace-readonly", "runtime-readonly", "usr-readonly"}:
+                passed = passed and detail == "EROFS"
             parsed[check_id] = PreflightCheck(
                 check_id=f"sandbox-{check_id}",
                 label=expected[check_id],
