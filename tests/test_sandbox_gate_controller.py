@@ -12,7 +12,8 @@ from core.settings import AgentSettings, AppSettings, SettingsStore
 
 _CHECK_IDS = (
     "workspace-root",
-    "workspace-write",
+    "workspace-readonly",
+    "state-write",
     "outside-direct",
     "symlink-escape",
     "child-inherits",
