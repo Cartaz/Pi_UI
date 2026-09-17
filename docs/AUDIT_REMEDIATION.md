@@ -1,50 +1,53 @@
-# Audit remediation — 16 September 2026
+# Audit remediation — 17 settembre 2026
 
-Status: **corrective branch; not accepted on the target desktop and not a completed M1 milestone.** This report supersedes the temporary `_audit-remediation-plan.md` on the branch. It does not modify the historical M0 evidence: M0 verified the earlier read-write workspace policy; today's changes must be tested again.
+**Stato: PR correttiva in bozza; il gate sul desktop target non è stato eseguito. M1 non è chiusa.** Il precedente gate M0 (9–10 settembre) riguardava un workspace scrivibile e non è una prova della nuova policy.
 
-## Source and ownership inventory
+## Ownership verificata
 
-- `core/sandbox.py` is the single Bubblewrap mount policy for runtime and active gate; `core/agent/runtime.py` constructs the mandatory Pi RPC launch specification.
-- `core/agent/bootstrap.py` prepares Pi runtime paths, model configuration and credentials; Qt `QProcess` starts and owns the process in `ui/native`.
-- Pi is canonical for session data; `.pi-agent` inside the workspace holds app-isolated Pi configuration and session files.
-- `AgentController` owns workspace selection and current Pi connection; `WorkspaceBrowserController` and `WorkspaceDocumentController` do not write documents.
-- `WorkspacePanel.qml` and `DocumentPanel.qml` are presentation only. The flat lazy `WorkspaceTreeListModel` is a deliberate current implementation; a future hierarchical model needs measured justification rather than a cosmetic migration.
+- `core/sandbox.py` definisce un'unica policy di mount per Pi e per il gate attivo; `core/agent/runtime.py` costruisce la specifica di avvio RPC. `core/agent/bootstrap.py` prepara directory, config modelli e credenziali prima dell'avvio.
+- Qt QProcess in `ui/native` possiede i processi. Pi possiede sessioni/config in `.pi-agent`; `AgentController` possiede la proiezione di chat, workspace e connessione. Browser e preview hanno controller separati e non scrivono documenti.
+- Gli adapter sono il confine verso QML. `WorkspaceTreeListModel` è per ora una lista piatta lazy con `depth`, scelta documentata in [ARCHITECTURE.md](ARCHITECTURE.md).
 
-## Changes actually made
+## Correzioni introdotte sulla PR
 
-1. **Mandatory sandbox:** `build_launch_spec` rejects `sandbox_enabled=False`. The unsandboxed launch branch and unsandboxed environment construction were removed. Missing Bubblewrap remains a startup failure, not a fallback.
-2. **Protect unversioned documents:** `build_bubblewrap_arguments` mounts `/workspace` read-only, then mounts only `/workspace/.pi-agent` read-write, so Pi can persist sessions/model configuration. The writable state path rejects a pre-existing symlink/non-directory; runtime path preparation also rejects symlinked `.pi-agent` and `sessions`. `--share-net` is unchanged: this is filesystem isolation, not network egress control.
-3. **State is explicit in the GUI:** Knowledge panel displays the disabled agent-document-write policy; selected rows use orange text and a lightweight inset cue, with no per-row expensive shader.
-4. **Contrast improvements:** Knowledge/browser status and Document path/status text use the existing `textSecondary` token instead of low-contrast `textMuted`, preserving the canonical RGB tokens in `Theme.qml`.
-5. **Regression tests:** runtime rejects direct launch and symlinked state paths; the sandbox arguments must contain one writable bind for `.pi-agent` and a read-only bind for the document workspace. The CI gate covers Python 3.12–3.14, compileall, zero-warning QML lint, pytest and offscreen smoke.
-6. **Documentation:** AGENTS.md and ADR-020 describe current behavior and explicitly distinguish historical M0 tests from the newly required target test.
+1. **Sandbox obbligatoria:** il launcher Python rifiuta `sandbox_enabled=False`. Sono stati eliminati la costruzione di ambiente host e il percorso di esecuzione diretta. In assenza di Bubblewrap l'avvio fallisce, senza fallback.
+2. **Blocco temporaneo delle scritture ai documenti:** `/workspace` viene montato read-only; il solo bind in scrittura è `/workspace/.pi-agent` per la configurazione e le sessioni. Controlli statici e preparazione del runtime rifiutano state directory sostituite con symlink o file. La rete rimane condivisa (`--share-net`): nessun filtro delle destinazioni.
+3. **Gate modificato:** il precedente test `workspace-write` è stato sostituito da `workspace-readonly` (tentativo di creare un file fuori da `.pi-agent`) e `state-write` (round-trip in `.pi-agent`). La fixture del controller è stata sincronizzata dopo un errore CI che aveva lasciato i vecchi ID.
+4. **Presentazione e accessibilità:** il pannello Knowledge esplicita la disabilitazione delle modifiche agente, le righe selezionate usano testo arancione, e i testi informativi dei pannelli Knowledge/Document usano `textSecondary` anziché il token decorativo `textMuted`. Il desktop reale deve ancora confermare focus, contrasto e resa.
+5. **Documentazione:** AGENTS, README, ADR-020 e ARCHITECTURE distinguono componenti implementati, funzionalità previste e prove M0 storiche.
 
-## Deliberate functional change and limitations
+## Test osservati
 
-- The M0 test where Pi modified a document is *historical* and will no longer succeed with this branch. This is intentional: the prior path could overwrite important files without pre-write snapshots. Do not advertise agent document editing until the complete versioning/conflict/recovery path is proven. The app's read-only preview and chat are supposed to remain functional.
-- `.pi-agent` remains writable to Pi itself. Protect its own config/session integrity and consider recovery/backup separately; the document write block does not establish provenance or rollback for state stored there.
-- The existing active Bubblewrap gate tests a write *inside* `.pi-agent`, historically called `workspace-write`; it does not yet dynamically test a rejected document write. Its old label is not evidence of full workspace writability. The actual document-denial assertion below is a new required target gate.
-- All file-level protections depend on the real Bubblewrap setup. Static argv tests alone do not prove mount behavior. The pre-existing M1 preview target gate (#27) also remains open.
-- Remaining code audit debt is tracked separately: `AgentController` growth, `Main.qml` informational `textMuted` uses and visual contrast/focus on a real GPU, settings-level rejection of legacy `sandbox_enabled=false`, reproducible installer, PSS measurements and updating the older 'proposed architecture' headings. None of these is falsely marked complete here.
+- La run CI [#149](https://github.com/Cartaz/Pi_UI/actions/runs/35148342124) è **fallita** su Python 3.12/3.13/3.14: la fixture del gate controller conteneva ancora `workspace-write`, mentre il parser richiedeva `workspace-readonly` e `state-write`.
+- Commit correttivo [`308a744`](https://github.com/Cartaz/Pi_UI/commit/308a7440596195fcc9b584bd9b897e8ac7b6c5e5): fixture sincronizzata. La run CI [#150](https://github.com/Cartaz/Pi_UI/actions/runs/35189982630) ha completato **con successo tutti e tre i job**; ciascuno ha eseguito compileall, qmllint a zero warning e pytest inclusi smoke QML offscreen. I cambi puramente documentali successivi non sono un gate di sicurezza aggiuntivo.
+- Queste prove verificano il codice e il comportamento sintetico, **non** che il mount read-only funzioni su CachyOS/Wayland o che Pi e Ornith continuino a funzionare con esso.
 
-## Mandatory real-desktop gate before merge
+## Modifiche intenzionali e limiti
 
-Use a **disposable workspace containing only synthetic files**, never the personal archive. Record the tested commit, CachyOS, Qt/PySide6, Pi, Bubblewrap versions and results. Do not alter the actual personal archive to test this policy.
+- Pi non può più modificare documenti via tool finché un servizio di revisioni *prima* della scrittura, conflitti, ripristino e crash recovery non protegge ogni percorso di mutazione. Il test storico M0 di scrittura del file non deve più risultare positivo. Preview read-only e chat devono invece continuare a funzionare.
+- Pi può tuttora modificare `.pi-agent`, comprese configurazione e sessioni. La policy documentale non garantisce revisioni né backup per quella directory.
+- Il gate attivo include ora un tentativo di scrittura del documento oltre al round-trip dello stato; la prova effettiva sul target non è ancora stata registrata. Il test di sola creazione non sostituisce la prova di sovrascrittura di un file esistente o quella attraverso i tool reali di Pi.
+- La verifica del risultato del probe va resa più stretta: errori diversi da `EROFS` non dovrebbero attestare da soli un mount read-only. Anche i controlli anti-symlink eseguiti prima del lancio hanno una finestra temporale da valutare nel modello di minaccia. Non proclamare una protezione universale prima dell'accettazione reale.
 
-1. Create the disposable workspace with a sentinel text file at its root, and preserve its hash/content externally before testing. Select it in Pi_UI.
-2. Run the GUI host preflight and active Bubblewrap gate. Confirm no fallback to direct Pi. Existing gate checks should continue to pass, with the writable `.pi-agent` storage remaining functional.
-3. Connect to Pi and attempt a simple **tool** write to the root sentinel and creation of a new file in `/workspace`. Both must fail due to the read-only mount; the original bytes/hash and directory entries must remain unchanged. If Pi finds an alternate writing path, the gate fails.
-4. Disconnect and reconnect to the *same exact* session. Verify session history still persists in `.pi-agent/sessions`, and a response from Ornith can still stream. Test stop and normal application shutdown with no app-owned orphan processes.
-5. Try an external sentinel path and a symlink from the workspace to an outside file. Both must remain inaccessible, as under the earlier M0 confinement gate. Test that injected symlinks for `.pi-agent` or `sessions` fail startup instead of redirecting writes.
-6. Repeat preview checks from issue #27 on actual Wayland: UTF-8 content, reload after external change, CRLF/Unicode copy, binary explicit state, drawer minimum layout, scrolling, focus.
-7. Confirm the Knowledge panel visibly explains that agent document writes are disabled. Inspect readability of status text and orange selected rows on the actual GPU and at minimum supported geometry; record PSS for GUI, Pi and workers separately if making any performance claim.
+## Gate reale obbligatorio prima del merge
 
-Record results in this file only after execution. **No target execution occurred during this corrective branch work.**
+Usare **solo un workspace usa-e-getta con file sintetici**, mai l'archivio personale. Annotare commit, distribuzione/kernel, versioni Qt/PySide6/Pi/Bubblewrap, scenari, risultato e limiti.
 
-## Remaining acceptance gates / follow-up
+1. Preparare un documento sentinella nella radice, conservarne hash e contenuto fuori dal workspace e verificare la configurazione della sandbox.
+2. Eseguire il preflight e il gate Bubblewrap dalla GUI: `workspace-readonly` e `state-write` devono entrambi passare; niente fallback unsandboxed. Verificare che l'errore osservato per un tentativo di scrittura nel workspace sia effettivamente un filesystem read-only, non EEXIST o una semplice autorizzazione del file.
+3. Avviare Pi e provare via tool sia la creazione di un file nella radice sia la sovrascrittura della sentinella. Entrambe devono fallire senza alterare byte, hash o directory entries; provare anche i percorsi di scrittura alternativi realmente disponibili a Pi.
+4. Verificare streaming di Ornith, stop, reconnect della **stessa** sessione e stato persistito in `.pi-agent/sessions`. Chiudere l'app mentre Pi è attivo; nessun processo posseduto deve rimanere orfano.
+5. Verificare il blocco di sentinel esterna e symlink escape; tentare symlink al posto di `.pi-agent` e `sessions` prima del bootstrap e confermare failure chiara.
+6. Rieseguire l'[issue #27](https://github.com/Cartaz/Pi_UI/issues/27) su Wayland: UTF-8, reload, CRLF/Unicode in copia, stati binario/errore, drawer, layout minimo, scrolling e focus.
+7. Controllare avviso di sola lettura, contrasti, selezione e resa delle ombre su GPU reale. PSS di GUI, Pi e worker da `/proc/<pid>/smaps_rollup` solo se si formulano claim prestazionali.
 
-- Implement proper pre-write snapshot/hash revision service, error handling and crash recovery for *every* autonomous shell/tool writer before allowing writable document mounts again. A watcher after mutation is insufficient.
-- Eliminate the remaining semantic low-contrast status text from `Main.qml`, then check keyboard/focus/contrast visually.
-- Reassess whether the flat list model is adequate under measured realistic tree sizes; keep it if performance is acceptable and update architecture prose accordingly.
-- Update outdated roadmap/architecture phase language, and only add an installer when its end-to-end behavior can be tested. Do not turn these into placeholder features.
-- Keep PR in draft until CI and target gate are observed; do not merge based on historical M0 results alone.
+**Nessun test target di questa PR è stato effettuato tramite questa sessione.** Registrare gli esiti qui soltanto dopo esecuzione.
+
+## Debito rimasto prima dello sviluppo di nuove funzionalità
+
+- Rafforzare la verifica del tipo di errore del gate, eliminare l'ambiguità sui falsi pass e confermare il comportamento reale del namespace.
+- Ridurre il debito `AgentController` con estrazioni incrementali e test di parità; correggere testo informativo a basso contrasto ancora presente in `Main.qml` e verificarne focus/tastiera sul target.
+- Allineare le attività già implementate nella ROADMAP senza dichiarare M1 finita; completare installer idempotente e misure PSS quando entrano nei gate previsti, senza creare placeholder.
+- Per riabilitare le scritture dei documenti, progettare un percorso mediato con snapshot preventivo e verificare *tutti* i tool: un watcher post-scrittura è insufficiente.
+
+**Non integrare la PR in `main` finché i controlli di sicurezza, la CI della head finale e il gate reale non sono verificati.**
