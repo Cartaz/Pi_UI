@@ -12,7 +12,8 @@ from core.settings import AgentSettings, AppSettings, SettingsStore
 
 _CHECK_IDS = (
     "workspace-root",
-    "workspace-write",
+    "workspace-readonly",
+    "state-write",
     "outside-direct",
     "symlink-escape",
     "child-inherits",
@@ -23,6 +24,7 @@ _CHECK_IDS = (
     "runtime-sockets",
     "pid-namespace",
 )
+_READ_ONLY_IDS = frozenset(("workspace-readonly", "runtime-readonly", "usr-readonly"))
 
 
 def _make_executable(path: Path) -> Path:
@@ -108,7 +110,11 @@ def _success_result() -> CommandProbeResult:
         "schema": 1,
         "passed": True,
         "checks": [
-            {"id": check_id, "passed": True, "detail": "verified"}
+            {
+                "id": check_id,
+                "passed": True,
+                "detail": "EROFS" if check_id in _READ_ONLY_IDS else "verified",
+            }
             for check_id in _CHECK_IDS
         ],
     }

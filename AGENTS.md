@@ -4,7 +4,9 @@
 
 Costruire un AI OS desktop personale: uno spazio di conoscenza, più conversazioni, chat prioritaria e gestione file centrale. Pi è l'harness scelto; Ornith 1.5 gira su server LAN. Non trasformare il prodotto in un IDE o in un gestore multiprogetto.
 
-Questa inizializzazione contiene solo documentazione. Leggere README, ROADMAP e docs prima di implementare. Distinguere sempre funzioni esistenti, proposte e verifiche realmente eseguite.
+**Stato attuale:** M0 completata; M1 in corso. La GUI, la chat Pi e il browser/preview read-only esistono già. Distinguere sempre funzioni esistenti, proposte e verifiche realmente eseguite. Leggere README, ROADMAP, docs/M0_PROGRESS.md, docs/M1_PROGRESS.md e docs/AUDIT_REMEDIATION.md prima di modificare il codice.
+
+**Blocco di sicurezza temporaneo:** fino a versionamento pre-scrittura, conflitti e ripristino provati per ogni tool, Pi vede i documenti nel workspace in sola lettura. La sola sottodirectory `.pi-agent` è montata read-write per sessioni/config Pi. Non riabilitare scritture ai documenti modificando i mount o la configurazione, né presentare come operativo il tool-write di M0. Il test reale della nuova policy Bubblewrap sul target è ancora obbligatorio.
 
 ## Architettura vincolante
 
@@ -14,7 +16,7 @@ Questa inizializzazione contiene solo documentazione. Leggere README, ROADMAP e 
 - Il controller coordina servizi focalizzati. Ogni stato importante ha un solo proprietario. Evitare god object e astrazioni speculative.
 - `ui/` contiene integrazione Qt, adapter QObject con `@Slot` tipizzati e modelli Qt. Gli adapter convertono/validano input UI senza duplicare regole o filesystem policy.
 - QML possiede presentazione, animazioni e stato temporaneo di interazione. Niente networking, file/settings o stato operativo canonico in QML.
-- Liste non banali con QAbstractListModel e ruoli stabili; albero file con modello Qt gerarchico. Niente copie di collezioni operative in array JS.
+- Liste non banali con QAbstractListModel e ruoli stabili; il browser M1 attuale utilizza intenzionalmente un `QAbstractListModel` piatto con ruoli `depth` e caricamento lazy. Prima di migrare a un modello gerarchico, dimostrare limiti concreti e preservare il comportamento.
 - Pi possiede sessioni e ciclo agente; Python mantiene una proiezione UI ricostruibile, senza un secondo archivio canonico dei messaggi.
 - Nessun WebEngine, QWebChannel, UI HTML/CSS/JS o stack alternativo senza necessità concreta e decisione documentata.
 - Un'eventuale estensione TypeScript di Pi è un confine di integrazione necessario, non un secondo backend: niente indice, policy o persistenza duplicati.
@@ -27,7 +29,7 @@ Le card mantengono la superficie base. Gerarchia mediante spaziatura, tipografia
 
 Calibrazione: forte dark +8,+8 / blur 20 / alpha .62, light -6,-6 / 15 / .10; soft dark +3.5,+3.5 / 10 / .46, light -3,-3 / 8.5 / .075; hover circa +4.5,+4.5 / 12 e -3.8,-3.8 / 10; inset dark +3.4,+3.4 / 7 e light -3.1,-3.1 / 6.
 
-Componenti condivisi: RaisedSurface, InsetSurface, NeuButton, NeuToggle e righe. Non duplicare stack di effetti. Preferire QtQuick.Effects.RectangularShadow per rilievo/glow; `cached: false` di default, caching solo dopo misure.
+Componenti condivisi: RaisedSurface, InsetSurface, NeuButton, NeuToggle quando serve un toggle, e righe. Non duplicare stack di effetti. Preferire QtQuick.Effects.RectangularShadow per rilievo/glow; `cached: false` di default, caching solo dopo misure.
 
 ShaderEffect/SDF consentito per un inset non ottenibile con qualità sufficiente da componenti semplici: nascondere la complessità in un componente, sorgenti in `ui/qml/shaders/`, bake con `pyside6-qsb --qt6` della venv, varianti richieste incluse GLSL Linux/OpenGL e fallimento esplicito su errore. Non applicare shader pesanti a ogni delegate.
 
@@ -43,10 +45,11 @@ Controlli semantici, tastiera, focus visibile, Accessible, contrasto, layout res
 - Misurare memoria Linux con PSS da `/proc/<pid>/smaps_rollup`; non sommare RSS come memoria fisica. Dichiarare separatamente il server LAN.
 - Originali e memoria utente fuori dal repository. Indice ricostruibile; niente credenziali o contenuti privati in log/fixture/commit.
 - Selezionare una cartella non realizza una sandbox. Non dichiarare isolamento senza enforcement di sistema e prove sugli strumenti realmente abilitati.
+- Bubblewrap è obbligatorio nel lancio ordinario anche quando un'impostazione preesistente chiede il contrario: fallire prima di avviare Pi, mai lanciare direttamente.
 
 ## Installazione e verifiche
 
-Quando implementato, `install.sh` sarà Bash, CWD-independent, idempotente, con `set -Eeuo pipefail`: crea/ripara `.venv`, installa dipendenze fissate e verifica import, QML e shader. Usare tool della venv coerenti con PySide6. Non creare oggi un installer che finga un'app funzionante.
+`install.sh` non è ancora implementato: quando introdotto sarà Bash, CWD-independent, idempotente, con `set -Eeuo pipefail`: crea/ripara `.venv`, installa dipendenze fissate e verifica import, QML e shader. Usare tool della venv coerenti con PySide6. Non creare un installer che finga un'app funzionante.
 
 Usare logging Python, mai ingoiare eccezioni. Per cambi applicativi: verifiche pertinenti compileall, pytest, ruff se adottato, QML lint/load/offscreen e shader. Testare core, controller, settings, adapter/modelli e lifecycle. Offscreen non dimostra qualità degli shader su GPU.
 

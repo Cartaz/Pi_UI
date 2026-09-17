@@ -1,4 +1,4 @@
-"""Reusable Bubblewrap mount policy shared by Pi runtime and M0 gates."""
+"""Reusable fail-closed Bubblewrap mount policy shared by Pi and confinement gates."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 from core.settings import AgentSettings
 
 SANDBOX_HOME = PurePosixPath("/home/aios")
+SANDBOX_AGENT_STATE = PurePosixPath("/workspace/.pi-agent")
 
 _UNSAFE_RUNTIME_ROOTS = frozenset(
     {
@@ -37,10 +38,10 @@ def validate_sandbox_paths(
     *,
     host_workspace: Path,
 ) -> tuple[Path, PurePosixPath]:
-    """Validate the canonical writable/read-only roots and return resolved paths."""
+    """Validate canonical workspace/runtime roots and the private writable mount."""
 
     if not settings.sandbox_enabled:
-        raise SandboxConfigurationError("Bubblewrap policy requires sandbox_enabled")
+        raise SandboxConfigurationError("Bubblewrap is mandatory for Pi_UI")
 
     runtime_root = PurePosixPath(settings.runtime_root)
     if not runtime_root.is_absolute():
@@ -54,8 +55,14 @@ def validate_sandbox_paths(
     runtime_host = Path(settings.runtime_root).expanduser().resolve()
     if _paths_overlap(runtime_host, workspace):
         raise SandboxConfigurationError(
-            "runtime_root must not overlap the writable AIOS workspace"
+            "runtime_root must not overlap the AIOS workspace"
         )
+
+    # The only writable bind in the workspace is application-owned Pi state.
+    # Do not allow a pre-existing symlink to redirect it to another host tree.
+    agent_state = workspace / ".pi-agent"
+    if agent_state.is_symlink() or (agent_state.exists() and not agent_state.is_dir()):
+        raise SandboxConfigurationError("Pi agent state must be a real directory")
     return workspace, runtime_root
 
 
@@ -66,13 +73,14 @@ def build_bubblewrap_arguments(
     sandbox_workspace: PurePosixPath,
     command: Sequence[str],
 ) -> tuple[str, ...]:
-    """Build the canonical Pi_UI Bubblewrap argv without invoking a shell.
+    """Build argv without a shell; no unconfined fallback or unversioned file writes.
 
-    The sandbox starts from an empty mount namespace. The AIOS workspace is the
-    only personal read/write tree; ``/usr`` and the managed Pi runtime are
-    read-only. Network remains shared intentionally so Pi can reach LAN
-    inference and the internet when required by tools. The synthetic HOME is
-    owned by this policy and is always ``/home/aios``.
+    Until pre-write revisions and conflict handling cover every Pi tool, the
+    document workspace is read-only. Only its dedicated ``.pi-agent`` state
+    directory is writable so Pi can create/resume sessions and configuration.
+    The bootstrap/gate must create that directory before launching Bubblewrap.
+    Network remains shared for LAN inference and optional internet tool use;
+    this mount policy is *not* an egress firewall.
     """
 
     if not command or not isinstance(command[0], str) or not command[0]:
@@ -89,6 +97,8 @@ def build_bubblewrap_arguments(
         raise SandboxConfigurationError(
             "sandbox command executable must be inside /usr or runtime_root"
         )
+    if sandbox_workspace != PurePosixPath("/workspace"):
+        raise SandboxConfigurationError("sandbox workspace must be /workspace")
 
     return (
         "--unshare-all",
@@ -140,9 +150,12 @@ def build_bubblewrap_arguments(
         "--ro-bind-try",
         "/etc/ca-certificates",
         "/etc/ca-certificates",
-        "--bind",
+        "--ro-bind",
         str(workspace),
         str(sandbox_workspace),
+        "--bind",
+        str(workspace / ".pi-agent"),
+        str(SANDBOX_AGENT_STATE),
         "--chdir",
         str(sandbox_workspace),
         "--",

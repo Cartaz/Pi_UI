@@ -1,4 +1,4 @@
-"""Build deterministic Pi RPC launch specifications."""
+"""Build deterministic, always-sandboxed Pi RPC launch specifications."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ SANDBOX_SESSION_DIR = SANDBOX_AGENT_DIR / "sessions"
 
 
 class RuntimeConfigurationError(ValueError):
-    """Raised when Pi cannot be launched with the requested runtime policy."""
+    """Raised when Pi cannot be launched with the required sandbox policy."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,14 +52,18 @@ class PiLaunchSpec:
 
 
 def prepare_runtime_paths(paths: PiRuntimePaths) -> None:
-    """Create only Pi_UI-owned runtime directories inside the AIOS root."""
+    """Create only Pi_UI-owned state, refusing redirected state directories."""
 
     if not paths.host_workspace.is_dir():
         raise RuntimeConfigurationError(
             f"workspace does not exist or is not a directory: {paths.host_workspace}"
         )
-    paths.host_agent_dir.mkdir(mode=0o700, exist_ok=True)
-    paths.host_session_dir.mkdir(mode=0o700, exist_ok=True)
+    for directory in (paths.host_agent_dir, paths.host_session_dir):
+        if directory.is_symlink() or (directory.exists() and not directory.is_dir()):
+            raise RuntimeConfigurationError(f"Pi runtime state must be a real directory: {directory}")
+        directory.mkdir(mode=0o700, exist_ok=True)
+        if directory.is_symlink():
+            raise RuntimeConfigurationError(f"Pi runtime state was redirected: {directory}")
 
 
 def build_launch_spec(
@@ -70,46 +74,25 @@ def build_launch_spec(
     base_environment: Mapping[str, str] | None = None,
     session_id: str | None = None,
 ) -> PiLaunchSpec:
-    """Create argv/environment for Pi RPC without invoking a shell.
+    """Create sandbox argv/environment without shell or direct-launch fallback.
 
-    When sandboxing is enabled, QProcess launches Bubblewrap as the outer
-    process and Bubblewrap execs Pi inside the AIOS mount namespace. The child
-    environment is allow-listed here instead of inherited wholesale from the
-    desktop session.
-
-    ``session_id`` is Pi_UI's owned session identity. Pi 0.85.1's
-    ``--session-id`` reopens that exact project session when it exists and
-    creates a new session with the same id when the backing session file was
-    deleted. This avoids both global-recency selection and brittle stale-file
-    recovery in Pi_UI.
+    ``session_id`` belongs to Pi_UI. The pinned Pi 0.85.1 ``--session-id``
+    resumes that exact project session or recreates the missing backing file.
     """
 
+    if not settings.sandbox_enabled:
+        raise RuntimeConfigurationError("Bubblewrap is mandatory; direct Pi launch is disabled")
     if session_id is not None and not is_valid_session_id(session_id):
         raise RuntimeConfigurationError("invalid Pi session id")
 
     runtime_paths = paths or PiRuntimePaths.for_workspace(working_directory)
     base_env = dict(os.environ if base_environment is None else base_environment)
-
     environment = _build_sanitized_environment(
         settings,
         base_environment=base_env,
         paths=runtime_paths,
     )
-    pi_arguments = _build_pi_arguments(
-        settings,
-        runtime_paths,
-        session_id=session_id,
-    )
-
-    if not settings.sandbox_enabled:
-        return PiLaunchSpec(
-            executable=settings.executable,
-            arguments=tuple(pi_arguments),
-            environment=environment,
-            working_directory=runtime_paths.host_workspace,
-            paths=runtime_paths,
-        )
-
+    pi_arguments = _build_pi_arguments(settings, runtime_paths, session_id=session_id)
     executable = _validated_sandbox_pi_executable(settings)
     arguments = build_bubblewrap_arguments(
         settings,
@@ -132,43 +115,27 @@ def _build_sanitized_environment(
     base_environment: Mapping[str, str],
     paths: PiRuntimePaths,
 ) -> dict[str, str]:
-    if settings.sandbox_enabled:
-        home = str(SANDBOX_HOME)
-        path = f"{settings.runtime_root}/bin:/usr/bin:/bin"
-        agent_dir = str(paths.sandbox_agent_dir)
-        session_dir = str(paths.sandbox_session_dir)
-        identity_environment = {
-            "USER": "aios",
-            "LOGNAME": "aios",
-            "TMPDIR": "/tmp",
-        }
-    else:
-        home = base_environment.get("HOME", str(Path.home()))
-        path = base_environment.get("PATH", "/usr/bin:/bin")
-        agent_dir = str(paths.host_agent_dir)
-        session_dir = str(paths.host_session_dir)
-        identity_environment = {}
+    """Allow-list only the environment actually needed by sandboxed Pi."""
 
     env = {
-        "HOME": home,
-        "PATH": path,
+        "HOME": str(SANDBOX_HOME),
+        "PATH": f"{settings.runtime_root}/bin:/usr/bin:/bin",
         "LANG": base_environment.get("LANG", "C.UTF-8"),
-        "PI_CODING_AGENT_DIR": agent_dir,
-        "PI_CODING_AGENT_SESSION_DIR": session_dir,
+        "PI_CODING_AGENT_DIR": str(paths.sandbox_agent_dir),
+        "PI_CODING_AGENT_SESSION_DIR": str(paths.sandbox_session_dir),
         "PI_TELEMETRY": "0",
-        **identity_environment,
+        "USER": "aios",
+        "LOGNAME": "aios",
+        "TMPDIR": "/tmp",
     }
-
     if settings.skip_version_check:
         env["PI_SKIP_VERSION_CHECK"] = "1"
     if settings.offline_startup:
         env["PI_OFFLINE"] = "1"
-
     if settings.auth_mode == "env" and settings.api_key_env:
         secret = base_environment.get(settings.api_key_env)
         if secret:
             env[settings.api_key_env] = secret
-
     return env
 
 
@@ -178,12 +145,7 @@ def _build_pi_arguments(
     *,
     session_id: str | None,
 ) -> list[str]:
-    session_dir = (
-        str(paths.sandbox_session_dir)
-        if settings.sandbox_enabled
-        else str(paths.host_session_dir)
-    )
-    arguments = ["--mode", "rpc", "--session-dir", session_dir]
+    arguments = ["--mode", "rpc", "--session-dir", str(paths.sandbox_session_dir)]
     if session_id is not None:
         arguments.extend(("--session-id", session_id))
     if settings.provider:

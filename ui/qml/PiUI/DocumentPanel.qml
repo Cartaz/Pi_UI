@@ -49,7 +49,7 @@ RaisedSurface {
                     Layout.fillWidth: true
                     visible: panel.documentAdapter.selectedPath.length > 0
                     text: panel.documentAdapter.selectedPath
-                    color: Theme.textMuted
+                    color: Theme.textSecondary
                     font.family: Theme.fontFamily
                     font.pixelSize: 9
                     elide: Text.ElideMiddle
@@ -105,9 +105,7 @@ RaisedSurface {
                                 : "Select a file from Knowledge to preview it.")
                         color: panel.documentAdapter.state === "error"
                             ? Theme.errorText
-                            : (panel.documentAdapter.state === "unsupported"
-                                ? Theme.textSecondary
-                                : Theme.textMuted)
+                            : Theme.textSecondary
                         font.family: Theme.fontFamily
                         font.pixelSize: 12
                         horizontalAlignment: Text.AlignHCenter
@@ -120,7 +118,7 @@ RaisedSurface {
                         text: "UTF-8 text only · maximum "
                             + Math.round(panel.documentAdapter.maxPreviewBytes / 1024)
                             + " KiB"
-                        color: Theme.textMuted
+                        color: Theme.textSecondary
                         font.family: Theme.fontFamily
                         font.pixelSize: 9
                         horizontalAlignment: Text.AlignHCenter
@@ -174,7 +172,7 @@ RaisedSurface {
             color: panel.documentAdapter.operationError.length > 0
                     || panel.documentAdapter.state === "error"
                 ? Theme.errorText
-                : Theme.textMuted
+                : Theme.textSecondary
             font.family: Theme.fontFamily
             font.pixelSize: 10
             elide: Text.ElideRight

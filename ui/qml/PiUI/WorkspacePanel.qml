@@ -36,9 +36,9 @@ RaisedSurface {
                 Text {
                     Layout.fillWidth: true
                     text: panel.workspaceAdapter.hasWorkspace
-                        ? "Workspace files"
+                        ? "Workspace files · agent read-only"
                         : "Choose a workspace"
-                    color: Theme.textMuted
+                    color: Theme.textSecondary
                     font.family: Theme.fontFamily
                     font.pixelSize: 10
                     elide: Text.ElideRight
@@ -75,7 +75,7 @@ RaisedSurface {
                             : "Workspace is empty"))
                 color: panel.workspaceAdapter.lastError.length > 0
                     ? Theme.errorText
-                    : Theme.textMuted
+                    : Theme.textSecondary
                 font.family: Theme.fontFamily
                 font.pixelSize: 12
                 horizontalAlignment: Text.AlignHCenter
@@ -123,6 +123,7 @@ RaisedSurface {
                     width: ListView.view.width
                     height: 30
 
+                    // One lightweight inset cue per selected row; no delegate shader/shadow.
                     Rectangle {
                         anchors.fill: parent
                         radius: 8
@@ -165,7 +166,9 @@ RaisedSurface {
                         Text {
                             width: parent.width - 38
                             text: fileRow.name
-                            color: fileRow.hiddenEntry ? Theme.textSecondary : Theme.textPrimary
+                            color: fileRow.ListView.isCurrentItem
+                                ? Theme.accent
+                                : (fileRow.hiddenEntry ? Theme.textSecondary : Theme.textPrimary)
                             font.family: Theme.fontFamily
                             font.pixelSize: 12
                             font.weight: fileRow.entryKind === "directory" ? Font.Medium : Font.Normal
@@ -204,10 +207,21 @@ RaisedSurface {
             color: panel.workspaceAdapter.operationError.length > 0
                     || panel.workspaceAdapter.lastError.length > 0
                 ? Theme.errorText
-                : Theme.textMuted
+                : Theme.textSecondary
             font.family: Theme.fontFamily
             font.pixelSize: 10
             elide: Text.ElideRight
+        }
+
+        Text {
+            Layout.fillWidth: true
+            visible: panel.workspaceAdapter.hasWorkspace
+            text: "Agent document writes disabled until safe revision history is available."
+            color: Theme.textSecondary
+            font.family: Theme.fontFamily
+            font.pixelSize: 10
+            wrapMode: Text.Wrap
+            Accessible.name: text
         }
     }
 }

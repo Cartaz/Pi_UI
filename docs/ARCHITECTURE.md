@@ -1,103 +1,65 @@
-# Architettura proposta
+# Architettura Pi_UI: implementato e pianificato
 
-Stato: progetto da implementare. I nomi di moduli e API in questo documento sono proposte, non API esistenti. Il contratto vincolante è [AGENTS.md](../AGENTS.md).
+Aggiornamento: 17 settembre 2026. **M0 è stata verificata con la policy precedente; M1 è incompleta.** Questa pagina distingue esplicitamente i componenti presenti da quelli della roadmap. Per le modifiche di sicurezza introdotte dalla PR di audit e i loro gate ancora aperti, leggere [AUDIT_REMEDIATION.md](AUDIT_REMEDIATION.md). Il contratto di sviluppo è [AGENTS.md](../AGENTS.md).
 
-## Confini di esecuzione
-
-La GUI Python/Qt gira normalmente sul desktop dell'utente. Su Linux, Pi Agent e tutti i processi figli avviati da Pi girano invece dentro una sandbox Bubblewrap posseduta dall'app. Il server LAN ospita l'inferenza Ornith. Workspace e software sono directory distinte: il primo contiene dati personali, il secondo codice versionato pubblicamente.
+## Confini effettivamente implementati (M0 e slice M1)
 
 ```mermaid
 flowchart TD
-    Q["Presentazione QML"] --> A["Adapter e modelli Qt"]
-    A --> C["Controller Python"]
-    C --> K["Servizi conoscenza e file"]
-    C --> T["QProcess / Bubblewrap / RPC"]
-    T <--> P["Pi Agent sandboxed"]
-    P --> L["Ornith sul server LAN"]
-    P <--> E["Estensione Pi sottile"]
-    E <--> K
-    K --> D["AIOS root: file e metadati locali"]
+    Q["QML / Qt Quick: presentazione"] --> A["Adapter QObject e modelli Qt"]
+    A --> C["Controller Python senza Qt"]
+    C --> K["Servizi core: Pi RPC, settings, browser, preview, policy sandbox"]
+    C --> T["Qt QProcess e worker asincroni"]
+    T --> B["Bubblewrap: Pi e figli"]
+    B --> L["Ornith via LAN"]
+    K --> W["File workspace e stato Pi"]
 ```
 
-Le frecce indicano comunicazione/responsabilità, non chiamate sincrone obbligatorie. Il canale estensione–Python va progettato in M2: non è una funzionalità del protocollo RPC standard da presumere esistente.
+- `main.py`: wiring di QApplication, SettingsStore, controller, adapter/modelli, `QQmlApplicationEngine`, runner nativi e shutdown. Non contiene logica di dominio.
+- `core/agent/`: RPC, bootstrap, discovery/configurazione dei profili, specifica di lancio, gestione protocollo e recovery. Pi conserva le sessioni canoniche; la cronologia Qt è una proiezione, non una seconda persistenza.
+- `core/settings.py` e `core/atomic_file.py`: settings tipizzati, percorsi XDG, migrazioni, quarantena delle configurazioni malformate e scritture atomiche delle impostazioni.
+- `core/sandbox.py`: politica di mount Bubblewrap unica per Pi e gate; `core/preflight.py` e `core/sandbox_gate.py`: pianificazione e verifica dell'ambiente. Il launcher in `core/agent/runtime.py` rifiuta l'avvio diretto quando la sandbox è disabilitata.
+- `core/workspace_access.py`, `core/workspace_browser.py`, `core/workspace_document.py`: path relativi confinati, scansione lazy e preview di file UTF-8. La preview rifiuta symlink, file non regolari, binari e file oltre il limite; **non modifica documenti**.
+- `controllers/`: `AgentController` gestisce workspace, profili, collegamento, sessione e transcript; controller separati gestiscono browser, preview, preflight e sandbox gate. `AgentController` è ancora un debito di dimensione/responsabilità da ridurre senza rompere le API.
+- `ui/adapters/` e `ui/models/`: QObject con slot/proprietà/segnali e `QAbstractListModel` con ruoli stabili. L'attuale albero lazy è volutamente una **lista piatta con ruolo `depth`**, non un `QAbstractItemModel` gerarchico. Cambiarlo soltanto se misure e casi d'uso lo richiedono.
+- `ui/native/`: QProcess per Pi, runner Qt per scansioni/preview, probe e deadline, shutdown e integrazione host. I worker non aggiornano direttamente i modelli QML.
+- `ui/qml/PiUI/`: shell, chat virtualizzata, Knowledge, DocumentPanel e componenti dark neumorphism. QML non possiede impostazioni, policy filesystem, sessioni persistenti o networking.
 
-Bubblewrap è parte del confine di sicurezza Linux: il suo mount namespace parte vuoto e riceve soltanto i mount dichiarati. La radice AIOS scelta dall'utente è l'unico albero dati personale montato read-write. Configurazione, sessioni e runtime Pi usati dall'app vivono in una sottocartella nascosta della stessa radice; directory di sistema necessarie a eseguire Node/Pi sono montate read-only. Il vero `$HOME`, `XDG_RUNTIME_DIR`, D-Bus, SSH/GPG agent e socket desktop non vengono esposti a Pi salvo futura necessità documentata e filtrata.
+### Proprietà dello stato
 
-La rete è un confine separato. La prima integrazione deve mantenere connettività verso Ornith sulla LAN e quindi può usare la rete host (`--unshare-all --share-net`). Questo protegge filesystem/processi ma non limita le destinazioni di rete: un eventuale requisito “solo endpoint inference” richiede una policy di egress separata e verificata.
+| Stato | Proprietario attuale | Note |
+| --- | --- | --- |
+| Cronologia e rami di chat | Pi e file di sessione in `.pi-agent/sessions` | `AgentController` espone soltanto la proiezione e la recovery; non modificare direttamente JSONL. |
+| Connessione, turn e selezione modello/workspace | `AgentController` | UI tramite adapter e segnali. |
+| File e contenuti originali | File reali dell'AIOS workspace | Browser/preview leggono tramite servizi Python; nessun database documenti canonico ancora presente. |
+| Selezione e testo della preview | `WorkspaceDocumentController` | Stato di presentazione ricavato dai file; il buffer Qt è sola lettura. |
+| Impostazioni applicative | `SettingsStore` | Le sessioni Pi non vengono replicate nello store delle impostazioni. |
+| Hover, animazioni, scroll e bozza del composer | QML | Solo stato di interazione temporaneo. |
 
-## Struttura del codice prevista
+## Sicurezza: policy nuova, gate ancora aperto
 
-| Percorso proposto | Responsabilità |
-|---|---|
-| `main.py` | Wiring QApplication, servizi, controller, engine e lifecycle |
-| `core/agent/` | Tipi, parsing RPC, stato, correlazione richieste e interfaccia trasporto |
-| `core/workspace/` | Identità documenti, operazioni file, revisioni, conflitti e cestino |
-| `core/knowledge/` | Estrazione, ricerca, contesto selettivo e risoluzione fonti |
-| `core/memory/` | Provenienza, decisioni e aggiornamenti della conoscenza |
-| `core/settings.py` | Unico store della configurazione applicativa |
-| `controllers/` | Coordinamento dei casi d'uso, senza duplicare servizi |
-| `ui/adapters/` | Slot/proprietà/signali focalizzati per chat, file e settings |
-| `ui/models/` | Modelli Qt per messaggi, strumenti, sessioni, risultati e albero file |
-| `ui/native/` | QProcess, Bubblewrap launcher, dialoghi/piattaforma, apertura URL e shutdown Qt |
-| `ui/qml/` | Theme.qml, componenti e schermate |
-| `ui/qml/shaders/` | Solo eventuali shader sorgente e relativa procedura di bake |
-| `integrations/pi/` | Estensione TypeScript minima, risorse e contratti Pi |
-| `tests/` | Test core/controller/UI, fixture sintetiche, integrazione e smoke |
+Bubblewrap isola Pi e i suoi figli mentre la GUI resta nel desktop host. `--unshare-all --share-net` permette LAN e Internet se richiesti dai tool: **non è un firewall di uscita**. Il processo Pi non riceve HOME reale, D-Bus, socket Wayland/SSH/GPG o le altre directory personali. `/usr` e il runtime Pi sono montati in sola lettura; `/tmp` è temporaneo e `/home/aios` è sintetico.
 
-Creare moduli quando nasce la responsabilità, senza scaffold vuoti per tutto il progetto. Non introdurre due implementazioni Python e TypeScript dello stesso algoritmo.
+La modifica post-audit monta `/workspace` **in sola lettura** e crea un unico bind in scrittura per `/workspace/.pi-agent`, necessario alle sessioni e alla configurazione di Pi. La preparazione rifiuta directory di stato symlink e configurazioni senza sandbox; non è una promessa di versionamento. Le scritture autonome dell'agente sui documenti restano disabilitate finché non sono dimostrate revisioni prima della scrittura, rilevazione dei conflitti, rollback e protezione di ogni tipo di tool. I dati in `.pi-agent` sono ancora modificabili dall'agente e richiedono una strategia distinta di integrità/backup.
 
-## Proprietà dello stato
+**Evidenza:** il gate CachyOS/Wayland del 9–10 settembre ha verificato la precedente policy con workspace scrivibile. Non valida automaticamente la policy attuale. Eseguire i nuovi test effettivi con documenti sintetici prima del merge; i test statici degli argomenti di Bubblewrap e la CI offscreen non equivalgono a un namespace reale sicuro. Vedi [VALIDATION.md](VALIDATION.md).
 
-| Stato | Proprietario canonico | Proiezione/derivazione |
-|---|---|---|
-| Cronologia, rami e compattazione delle sessioni | Pi e i suoi file di sessione | Modelli Python/Qt ricostruiti tramite API e letture compatibili |
-| Richieste RPC pendenti e processo | Servizio agent Python | Stato visibile negli adapter |
-| Originali, note e contenuti | File del workspace | Testo estratto e indice ricostruibili |
-| ID documenti, relazione path/revisioni e provenienza | Metadati persistenti gestiti dal WorkspaceService | Modello albero, recenti e risultati |
-| Revisioni e cestino | Store revisioni del WorkspaceService | Diff e anteprima |
-| Decisioni, obiettivi e conoscenze confermate | Note/registri aperti gestiti da servizi Python | Indice di ricerca e contesto agente |
-| Preferenze UI, endpoint, layout salvato | Settings Python | Binding QML; nessuna scrittura diretta |
-| Bozza editor recuperabile | Servizio documenti Python | Buffer di editing QML transitorio |
-| Hover, animazioni, selezione testo | QML | Non persistente |
+## Processo, timeout e recovery effettivi
 
-Non modificare direttamente una sessione attiva di Pi. Un eventuale catalogo dei file di sessione è una cache ricostruibile; va confrontato con le API disponibili nella versione fissata. I token accumulati della sessione non sono automaticamente l'occupazione attuale del contesto.
+Pi viene eseguito con `--mode rpc` su stdin/stdout JSONL tramite QProcess Qt. Gli ACK dei comandi sono distinti dal completamento dei turn; lo stato incerto impedisce replay automatici. Il watchdog di inattività non deve essere confuso con un hard timeout del modello lento. L'app possiede un `session-id` esatto; `--continue` globale non è usato. Un failed turn viene recuperato attraverso primitive pubbliche di session tree/fork, senza modificare la sessione JSONL. Lo shutdown gestisce escalation dei processi posseduti; non termina il server LAN condiviso. Questi comportamenti sono stati provati in M0, ma le regressioni applicabili vanno ripetute per le modifiche al launcher.
 
-## Integrazione Pi
+## UI, performance e accessibilità
 
-Usare `pi --mode rpc` con stdin/stdout JSONL e QProcess asincrono. Su Linux QProcess avvia Bubblewrap, che a sua volta esegue Pi come comando sandboxed; stdin/stdout/stderr restano i canali controllati dall'app. La documentazione verificata distingue risposte ai comandi ed eventi successivi. La GUI deve derivare il completamento dal lifecycle del turno e gestire separatamente rifiuto prima dell'accettazione e fallimento successivo. [RPC ufficiale](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/rpc.md)
+La chat e il browser utilizzano `ListView` e `reuseItems: true`. I modelli dati arrivano da Python; non replicare collection grandi in array JS o aggiungere effetti pesanti ai delegate. I token sono centralizzati in `Theme.qml` (RGB 20/20/20, accento RGB 255/102/0, Noto Sans, raggi 28/22/16/12). `RaisedSurface` e `InsetSurface` incapsulano gli effetti. Semantica della tastiera, ordine Tab, contrasto, focus e resa delle ombre richiedono verifica reale su KDE/Wayland. Usare `/proc/<pid>/smaps_rollup` per PSS: non esiste una baseline completa di memoria misurata per M1.
 
-Il parser tratta byte/frame incrementali, limiti e record sconosciuti. Stato proposto: processo `stopped/starting/ready/stopping/failed`; turno `idle/running/cancelling/failed`, con richieste pendenti correlate per ID. Tenere distinti stato processo, attività del modello e stato del server per evitare booleani contraddittori.
+## Componenti *previsti*, non ancora implementati
 
-Un errore di connessione non autorizza a inviare nuovamente il prompt: prima si ricostruisce l'esito tramite stato/sessione. Shutdown: fermare nuovi job, gestire coda/abort e richieste UI pendenti, attendere asincronamente entro timeout, terminare/escalare i processi posseduti, verificare i figli e salvare stato. Bubblewrap userà lifecycle esplicito (`--die-with-parent` e sessione separata quando appropriato), ma l'assenza di processi orfani va comunque provata sulla versione target. Non terminare il server LAN condiviso.
+- **M1:** importazione, creazione/rename/move, editor e draft recuperabile, snapshot pre-scrittura, conflitti, diff/revisioni e ripristino; conversazioni/gestione di Pi dalla GUI. La preview attuale non è un editor.
+- **M2:** `core/knowledge/`, estrazione e ricerca, citazioni risolvibili, eventuale estensione TypeScript sottile per invocare servizi Python via un IPC progettato e verificato. Nessun indice o gateway IPC operativo oggi.
+- **M3:** `core/memory/` e registri di decisioni/obiettivi con provenienza e data. Nessuna memoria semantica persistente implementata oggi.
+- **M4:** strumenti, routine, integrazioni ed eventuali subagent su esigenze reali.
+- **M5:** installer idempotente, update manager con staging e rollback, backup/restore, distribuzione, benchmark PSS e gate grafici/performance riproducibili. `install.sh` non esiste ancora.
 
-La baseline sceglie API/provider; `models.json` è una configurazione Pi prodotta dal servizio settings, non un secondo editor concorrente dei medesimi valori. Non importare espressioni eseguibili per credenziali da file non fidati. Isolare configurazione dell'app senza sovrascrivere quella globale dell'utente. [Modelli Pi](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md)
+Per il futuro, mantenere identità documentali, revisioni e provenienza in un servizio Python autorevole; SQLite/FTS5 e storage snapshot sono scelte da validare, non moduli già esistenti. Gli indici sono derivati; una transazione SQLite e un rename filesystem non sono un'unica transazione atomica. Nessun watcher post-scrittura può ricreare retroattivamente un originale già sovrascritto. Backup significa copia separata con restore provato, non soltanto revisioni locali.
 
-Per gli strumenti di conoscenza, preferire un'estensione Pi che inoltra richieste tipizzate a un endpoint IPC posseduto dall'app (socket locale da valutare rispetto a un helper subprocess). Vincolare accesso al processo/sessione autorizzati, schema, dimensioni, cancellazione e lifecycle. La scelta del trasporto richiede una piccola prova in M2; Python rimane unico proprietario di ricerca e policy. Le estensioni TypeScript sono supportate da Pi. [Estensioni ufficiali](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md)
-
-## Persistenza, concorrenza e recupero
-
-La radice AIOS è scelta dall'utente e contiene i dati persistenti dell'ambiente, inclusa una sottocartella interna riservata all'app per sessioni/config Pi quando serve al confinement Bubblewrap. Le impostazioni globali della GUI possono continuare a seguire XDG; nessun dato privato entra nella repository software. Metadati di identità/provenienza sono dati canonici da includere nel backup. Cache estrazione/indice sono eliminabili e ricostruibili. Esportazione e backup devono includere le informazioni necessarie a mantenere citazioni e revisioni, non soltanto i file visibili.
-
-Operazioni file con validazione path, hash atteso, snapshot precedente, scrittura atomica dove supportata e journal di recupero per operazioni che attraversano filesystem e database. Un rename su disco e una transazione SQLite non formano da soli una transazione atomica unica. Provare crash tra le fasi e riconciliazione al riavvio.
-
-Watcher con debounce e riconciliazione rileva modifiche esterne. I worker di estrazione sono invalidati quando cambia la revisione: un risultato tardivo non può sovrascrivere l'indice della versione nuova. Limiti su memoria/dimensioni/tempo e cancellazione per file problematici. Aggiornare modelli Qt nel loro thread, applicando batch da risultati dei worker.
-
-Scelta iniziale per le revisioni: snapshot locali indirizzati per hash e metadati espliciti. Git obbligatorio nel workspace aggiungerebbe conflitti e gestione del repository a documenti non tecnici; riconsiderarlo solo su esigenza concreta. Snapshot non significa backup: serve una copia separata verificata.
-
-## UI e accessibilità
-
-Sinistra conoscenze, centro chat prioritario, destra documento/diff richiudibile; conversazioni secondarie. Noto Sans per il contratto attuale. News Aggregator è riferimento visivo, non una dipendenza runtime.
-
-ListView virtualizza la chat, QAbstractListModel espone messaggi/attività, QAbstractItemModel gerarchico alimenta l'albero lazy. Renderizzare soltanto output necessari; contenuti grandi hanno anteprima limitata e apertura completa dedicata. Non annidare effetti pesanti in ogni messaggio o nodo.
-
-Scorciatoie previste: invio, nuova riga, stop, ricerca, apertura file e salvataggio; definire combinazioni coerenti e testarle su KDE. Focus di ritorno dopo dialoghi, ordine Tab, splitter da tastiera e nomi Accessible fanno parte del gate M1. Font scale e pannelli salvati passano dagli adapter ai settings Python.
-
-## Accessi e trust
-
-Il solo workspace selezionato dalla GUI non è una sandbox; il confinement nasce dal launcher Bubblewrap. Pi non deve vedere il vero home dell'utente, altre directory personali, socket D-Bus/desktop o agent di credenziali. Il profilo deve usare un root filesystem minimale: `/usr` e gli altri runtime strettamente necessari read-only, `/proc` e `/dev` controllati, `/tmp` temporaneo, ambiente ripulito e soltanto la radice AIOS read-write. Nessun `--bind /home /home` o equivalente.
-
-Tutti i processi figli creati da shell/tool/estensioni di Pi devono restare nello stesso namespace. Verificare esplicitamente tentativi di lettura/scrittura fuori dalla radice, symlink verso l'esterno, process discovery, accesso a socket host e shutdown. Non dichiarare la sandbox efficace finché questi test non sono verdi sul desktop target.
-
-Bubblewrap avverte che l'efficacia della sandbox dipende dai mount e dalle risorse esposte: in particolare socket D-Bus o altre capability host possono riaprire vie di esecuzione fuori sandbox. Per questo Pi, essendo headless, non riceve accesso alla sessione grafica. L'update manager di Pi resta fuori dal runtime sandbox normale e usa staging/rollback controllati invece di concedere a Pi permessi di scrittura sul sistema.
-
-La documentazione Pi prevede regole di trust anche per risorse locali e comportamento specifico in RPC. Caricare esplicitamente soltanto le risorse applicative previste e verificare il comportamento della versione fissata. Non abilitare globalmente ogni progetto per aggirare una mancata discovery. [Trust e contesto Pi](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/usage.md#project-trust)
+Decisioni e alternative: [DECISIONS.md](DECISIONS.md). Milestone e prove: [ROADMAP.md](../ROADMAP.md), [M1_PROGRESS.md](M1_PROGRESS.md), [VALIDATION.md](VALIDATION.md).
