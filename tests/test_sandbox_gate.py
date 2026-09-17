@@ -23,6 +23,11 @@ _CHECK_IDS = (
     "runtime-sockets",
     "pid-namespace",
 )
+_READ_ONLY_IDS = frozenset(("workspace-readonly", "runtime-readonly", "usr-readonly"))
+
+
+def _detail(check_id: str) -> str:
+    return "EROFS" if check_id in _READ_ONLY_IDS else "verified"
 
 
 def _make_executable(path: Path) -> Path:
@@ -76,6 +81,7 @@ def test_prepare_uses_canonical_policy_and_only_app_owned_scratch(tmp_path: Path
         probe_text = (plan.scratch_dir / "probe.mjs").read_text(encoding="utf-8")
         assert 'add("workspace-readonly", passed, detail)' in probe_text
         assert 'add("state-write", roundTrip' in probe_text
+        assert 'error?.code === "EROFS"' in probe_text
         assert "/workspace/.pi-ui-readonly-.m0-gate-run-1" in probe_text
 
         args = plan.probe.arguments
@@ -171,7 +177,7 @@ def test_parse_success_requires_all_exact_checks(tmp_path: Path) -> None:
         "schema": 1,
         "passed": True,
         "checks": [
-            {"id": check_id, "passed": True, "detail": "verified"}
+            {"id": check_id, "passed": True, "detail": _detail(check_id)}
             for check_id in _CHECK_IDS
         ],
     }
@@ -217,7 +223,10 @@ def test_parse_expected_confinement_failure_is_not_process_protocol_failure(
             {
                 "id": check_id,
                 "passed": check_id != "workspace-readonly",
-                "detail": "write unexpectedly succeeded" if check_id == "workspace-readonly" else "ok",
+                "detail": (
+                    "write unexpectedly succeeded"
+                    if check_id == "workspace-readonly" else _detail(check_id)
+                ),
             }
             for check_id in _CHECK_IDS
         ],
@@ -240,6 +249,52 @@ def test_parse_expected_confinement_failure_is_not_process_protocol_failure(
     failed = [check for check in report.checks if check.status == PreflightStatus.FAIL]
     assert len(failed) == 1
     assert failed[0].check_id == "sandbox-workspace-readonly"
+
+
+@pytest.mark.parametrize("bad_errno", ["EEXIST", "EACCES", "ENOENT"])
+def test_false_positive_readonly_probe_is_rejected(tmp_path: Path, bad_errno: str) -> None:
+    workspace = tmp_path / "AIOS"
+    workspace.mkdir()
+    settings, node = _settings(tmp_path)
+    service = SandboxGateService(id_factory=lambda: "race")
+    plan = service.prepare(
+        settings,
+        workspace=workspace,
+        node_executable=str(node),
+        outside_root=tmp_path / "state",
+    )
+    payload = {
+        "schema": 1,
+        "passed": True,
+        "checks": [
+            {
+                "id": check_id,
+                "passed": True,
+                "detail": bad_errno if check_id == "workspace-readonly" else _detail(check_id),
+            }
+            for check_id in _CHECK_IDS
+        ],
+    }
+    try:
+        report = service.parse_result(
+            plan,
+            CommandProbeResult(
+                probe_id="sandbox-confinement",
+                exit_code=0,
+                stdout=json.dumps(payload) + "\n",
+                stderr="",
+            ),
+        )
+    finally:
+        service.cleanup(plan)
+
+    assert report.passed is False
+    assert any(
+        check.check_id == "sandbox-workspace-readonly"
+        and check.status == PreflightStatus.FAIL
+        for check in report.checks
+    )
+    assert any(check.check_id == "sandbox-process-consistency" for check in report.checks)
 
 
 def test_malformed_gate_payload_fails_closed(tmp_path: Path) -> None:
